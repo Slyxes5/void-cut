@@ -1,18 +1,35 @@
-import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
-import { LanguageProvider } from './locales'
-import './index.css'
-import App from './App.tsx'
-import { AuthGate } from './auth/AuthGate'
-import { installAuthFetch } from './auth/client'
-import './auth/auth.css'
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import PublicPortfolio from './public/PublicPortfolio';
+import './index.css';
 
-installAuthFetch()
+const root = createRoot(document.getElementById('root')!);
+const hostname = window.location.hostname.toLowerCase();
+const isPrivateEditor = hostname === 'localhost' || hostname === '127.0.0.1'
+  || hostname === '::1' || hostname.endsWith('.ts.net');
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <LanguageProvider>
-      <AuthGate><App /></AuthGate>
-    </LanguageProvider>
-  </StrictMode>,
-)
+if (isPrivateEditor) {
+  void Promise.all([
+    import('./locales'),
+    import('./App'),
+    import('./auth/AuthGate'),
+    import('./auth/client'),
+    import('./auth/auth.css'),
+  ]).then(([localeModule, appModule, authModule, clientModule]) => {
+    clientModule.installAuthFetch();
+    const LanguageProvider = localeModule.LanguageProvider;
+    const App = appModule.default;
+    const AuthGate = authModule.AuthGate;
+    root.render(
+      <StrictMode>
+        <LanguageProvider>
+          <AuthGate><App /></AuthGate>
+        </LanguageProvider>
+      </StrictMode>,
+    );
+  }).catch(() => {
+    root.render(<main className="portfolio-load-error">The private editor could not be loaded. Check the laptop connection and try again.</main>);
+  });
+} else {
+  root.render(<StrictMode><PublicPortfolio /></StrictMode>);
+}
