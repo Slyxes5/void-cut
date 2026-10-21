@@ -5,13 +5,22 @@ import { ClipStudioSection } from './components/ClipStudioSection';
 import { CookiesModal } from './components/CookiesModal';
 import { CookieWarningModal } from './components/CookieWarningModal';
 import { ClipTrimmerModal } from './components/ClipTrimmerModal';
+import { SubtitleEditor } from './components/SubtitleEditor';
 import { AppUpdateModal } from './components/AppUpdateModal';
 import { resilientFetch } from './utils/api';
+import { BatchRecovery, type RecoveryConnection } from './services/batchRecovery';
+import { importClipHandoff } from './services/clipHandoff';
+import { syncSubtitleAudio } from './services/subtitleSync';
+import { BatchRenderRecoveryPanel } from './components/BatchRenderRecoveryPanel';
+import { SocialUploadModal } from './components/SocialUploadModal';
 import { getStoredCookies, hasStoredCookies } from './utils/cookieUtils';
 import { extractAudioFromVideoClient } from './utils/audioExtractor';
 import { renderClipClientSide, triggerBrowserDownload } from './services/clientRenderer';
 import { useLanguage } from './locales';
-import type { AnalyzeResponse, ViralClip, RenderSettings, BatchRenderProgress } from './types';
+import { WorkflowNavigation } from './components/WorkflowNavigation';
+import { useWorkflowNavigation } from './useWorkflowNavigation';
+import './workflow.css';
+import type { AnalyzeResponse, ViralClip, RenderSettings, BatchRenderProgress, RenderClipStatus } from './types';
 
 // Declare YT global variables for TypeScript
 declare global {
@@ -22,7 +31,10 @@ declare global {
 }
 
 export default function App() {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
+  // Initial-mount only: same-tab hash changes never replace an unsaved editor.
+  // Open another handoff in a new tab (or reload) after saving current work.
+  const initialHandoffHash = useRef(window.location.hash);
   const [url, setUrl] = useState('');
   const [gdriveUrl, setGdriveUrl] = useState('');
   const [sourceMode, setSourceMode] = useState<'youtube' | 'gdrive' | 'upload'>('youtube');
@@ -207,7 +219,47 @@ export default function App() {
 
   // Results
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
+  const { page, navigate } = useWorkflowNavigation(Boolean(result));
   const [activeClip, setActiveClip] = useState<ViralClip | null>(null);
+  const [subtitleEditingClip, setSubtitleEditingClip] = useState<ViralClip | null>(null);
+  const [socialUploadClip, setSocialUploadClip] = useState<{batchId: string; clip: RenderClipStatus} | null>(null);
+  const closeSocialUpload = useCallback(() => setSocialUploadClip(null), []);
+  const [socialAccountsOpen, setSocialAccountsOpen] = useState(false);
+  const closeSocialAccounts = useCallback(() => setSocialAccountsOpen(false), []);
+  const [subtitleEdits, setSubtitleEdits] = useState<Record<string, import('./types').EditedSubtitleWord[]>>({});
+  const subtitleClipKey = (clip: ViralClip) => `${clip.start_time}_${clip.end_time}`;
+  const [isSyncingSubtitles, setIsSyncingSubtitles] = useState(false);
+  const [subtitleSyncError, setSubtitleSyncError] = useState('');
+  const subtitleSyncPending = useRef(false);
+  const subtitleSourceKey = `${result?.video_id || ''}|${result?.video_url || ''}`;
+  const subtitleSourceRef = useRef(subtitleSourceKey);
+  subtitleSourceRef.current = subtitleSourceKey;
+  useEffect(() => {
+    setSubtitleEdits({});
+    setSubtitleEditingClip(null);
+    setSubtitleSyncError('');
+  }, [subtitleSourceKey]);
+
+  const handleSyncSubtitles = async (clip: ViralClip) => {
+    if (!result || subtitleSyncPending.current) throw new Error('Tunggu sinkronisasi yang sedang berjalan.');
+    const source = subtitleSourceKey;
+    subtitleSyncPending.current = true;
+    setIsSyncingSubtitles(true);
+    setSubtitleSyncError('');
+    try {
+      const videoSource = result.video_url || (result.source_type === 'upload' || result.source_type === 'gdrive'
+        ? url : `https://www.youtube.com/watch?v=${encodeURIComponent(result.video_id)}`);
+      const words = await syncSubtitleAudio(videoSource, clip, getStoredCookies());
+      if (subtitleSourceRef.current !== source) throw new Error('Video sumber berubah. Sinkronkan ulang klip yang aktif.');
+      return words;
+    } catch (e) {
+      if (subtitleSourceRef.current === source) setSubtitleSyncError(e instanceof Error ? e.message : 'Sinkronisasi gagal.');
+      throw e;
+    } finally {
+      subtitleSyncPending.current = false;
+      setIsSyncingSubtitles(false);
+    }
+  };
   const [expandedClipIndex, setExpandedClipIndex] = useState<number | null>(null);
 
   const leftPanelRef = useRef<HTMLDivElement>(null);
@@ -233,7 +285,7 @@ export default function App() {
       window.removeEventListener('resize', updateHeight);
       observer.disconnect();
     };
-  }, [result, activeClip, expandedClipIndex]);
+  }, [result, activeClip, expandedClipIndex, page]);
 
   // Search & Filtering States
   const [searchQuery, setSearchQuery] = useState('');
@@ -247,48 +299,54 @@ export default function App() {
   // Clip Studio & Auto-Clipper states
   const [batchProgress, setBatchProgress] = useState<BatchRenderProgress | null>(null);
   const [isLaunchingRender, setIsLaunchingRender] = useState(false);
-  const batchEventSourceRef = useRef<EventSource | null>(null);
+  const batchRecoveryRef = useRef<BatchRecovery | null>(null);
+  const renderLaunchLock = useRef(false);
+  const [renderConnection, setRenderConnection] = useState<RecoveryConnection>({ mode: 'idle', message: '' });
+  const [renderRecoveryBlocked, setRenderRecoveryBlocked] = useState(false);
 
-  // Close SSE connection on unmount
   useEffect(() => {
+    const controller = new BatchRecovery({
+      storage: {
+        getItem: key => localStorage.getItem(key),
+        setItem: (key, value) => localStorage.setItem(key, value),
+        removeItem: key => localStorage.removeItem(key),
+      },
+      onBatch: batch => {
+        setBatchProgress(batch);
+        setRenderRecoveryBlocked(controller.isBlocked());
+      },
+      onConnection: connection => {
+        setRenderConnection(connection);
+        setRenderRecoveryBlocked(controller.isBlocked());
+      },
+    });
+    batchRecoveryRef.current = controller;
+    controller.restore();
+    const resume = () => controller.resume();
+    const visible = () => { if (document.visibilityState === 'visible') resume(); };
+    window.addEventListener('online', resume);
+    window.addEventListener('pageshow', resume);
+    window.addEventListener('focus', resume);
+    document.addEventListener('visibilitychange', visible);
     return () => {
-      if (batchEventSourceRef.current) {
-        batchEventSourceRef.current.close();
-        batchEventSourceRef.current = null;
-      }
+      controller.stop();
+      if (batchRecoveryRef.current === controller) batchRecoveryRef.current = null;
+      window.removeEventListener('online', resume);
+      window.removeEventListener('pageshow', resume);
+      window.removeEventListener('focus', resume);
+      document.removeEventListener('visibilitychange', visible);
     };
   }, []);
 
-  const listenToBatchProgress = useCallback((batchId: string) => {
-    if (batchEventSourceRef.current) {
-      batchEventSourceRef.current.close();
-      batchEventSourceRef.current = null;
-    }
-    const eventSource = new EventSource(`/api/render-progress/${batchId}`);
-    batchEventSourceRef.current = eventSource;
+  const listenToBatchProgress = useCallback((batchId: string, requestId?: string) => {
+    batchRecoveryRef.current?.watch(batchId, requestId);
+  }, []);
 
-    eventSource.onmessage = (event) => {
-      try {
-        const progressData: BatchRenderProgress = JSON.parse(event.data);
-        setBatchProgress(progressData);
-        if (progressData.overall_status === 'completed' || progressData.overall_status === 'error') {
-          eventSource.close();
-          if (batchEventSourceRef.current === eventSource) {
-            batchEventSourceRef.current = null;
-          }
-        }
-      } catch (err) {
-        console.error('Failed to parse progress SSE:', err);
-      }
-    };
-
-    eventSource.onerror = (err) => {
-      console.error('SSE connection error:', err);
-      eventSource.close();
-      if (batchEventSourceRef.current === eventSource) {
-        batchEventSourceRef.current = null;
-      }
-    };
+  const dismissBatchProgress = useCallback(() => {
+    if (batchRecoveryRef.current?.isBlocked()
+      && !window.confirm('This render may still be running on the laptop. Forgetting recovery does not cancel it and could allow a duplicate render. Continue?')) return;
+    batchRecoveryRef.current?.dismiss();
+    setBatchProgress(null);
   }, []);
 
   const markedClipsList = useMemo(() => {
@@ -305,7 +363,8 @@ export default function App() {
   }, [sourceMode, result?.source_type, result?.video_id, result?.video_url]);
 
   const handleStartBatchRender = async (settings: RenderSettings, forceProceed = false) => {
-    if (!result) return;
+    if (!result || renderLaunchLock.current || batchProgress?.overall_status === 'running'
+      || batchRecoveryRef.current?.isBlocked()) return;
 
     if (!forceProceed && isCurrentVideoYouTube() && !hasStoredCookies()) {
       const skipped = sessionStorage.getItem('cheatclip_skip_cookie_warning') === 'true';
@@ -322,11 +381,20 @@ export default function App() {
       }
     }
 
+    renderLaunchLock.current = true;
     setIsLaunchingRender(true);
 
     const isClientMode = settings.hardwareAccel === 'browser_wasm' || settings.renderEngine === 'client';
+    if (isClientMode && (settings.selectedClips.some(c => subtitleEdits[subtitleClipKey(c)] !== undefined) || (settings.timelineSfx?.length || 0) > 0)) {
+      renderLaunchLock.current = false;
+      setIsLaunchingRender(false);
+      window.alert('Edited Transcript dan Multi-SFX membutuhkan rendering server FFmpeg. Pilih Video Encoder CPU/Auto.');
+      return;
+    }
 
+    navigate('exports');
     if (isClientMode) {
+      batchRecoveryRef.current?.dismiss();
       try {
         const batchId = `client_${Date.now()}`;
         const selectedClips = settings.selectedClips;
@@ -480,19 +548,29 @@ export default function App() {
         });
         return;
       } finally {
+        renderLaunchLock.current = false;
         setIsLaunchingRender(false);
       }
     }
 
+    let requestId: string | null = null;
+    let submissionRejected = false;
     try {
+      requestId = batchRecoveryRef.current?.beginSubmission() ?? null;
+      if (!requestId) return;
+      setBatchProgress(null);
       const userCookies = getStoredCookies();
       const resp = await fetch('/api/render-batch', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': requestId },
+        signal: AbortSignal.timeout(20000),
         body: JSON.stringify({
-          video_url: url || `https://www.youtube.com/watch?v=${result.video_id}`,
+          video_url: result.video_url || url || `https://www.youtube.com/watch?v=${result.video_id}`,
           video_id: result.video_id,
-          clips: settings.selectedClips,
+          clips: settings.selectedClips.map(c => ({
+            ...c,
+            edited_subtitle_words: subtitleEdits[subtitleClipKey(c)] ?? undefined,
+          })),
           cookies: userCookies || undefined,
           settings: {
             aspect_ratio: settings.aspectRatio,
@@ -530,6 +608,7 @@ export default function App() {
             hook_sfx_enabled: settings.hookSfxEnabled || false,
             hook_sfx_file_path: settings.hookSfxFilePath || null,
             hook_sfx_volume: settings.hookSfxVolume !== undefined ? settings.hookSfxVolume : 100.0,
+            timeline_sfx: settings.timelineSfx || [],
             // Raw Voice Audio Boost
             original_audio_volume: settings.originalAudioVolume !== undefined ? settings.originalAudioVolume : 100.0,
             // Watermark
@@ -551,12 +630,17 @@ export default function App() {
         }),
       });
 
+      if (!batchRecoveryRef.current?.ownsRequest(requestId)) return;
       if (!resp.ok) {
         const errJson = await resp.json().catch(() => ({}));
+        if (!batchRecoveryRef.current?.ownsRequest(requestId)) return;
+        submissionRejected = resp.status >= 400 && resp.status < 500 && resp.status !== 408 && resp.status !== 429;
+        if (submissionRejected) batchRecoveryRef.current?.dismiss();
         throw new Error(errJson.detail || 'Failed to start batch render job');
       }
 
       const data = await resp.json();
+      if (!batchRecoveryRef.current?.ownsRequest(requestId)) return;
       const batchId = data.batch_id;
 
       // Initialize inline batch progress on the side under live preview (no modal)
@@ -585,55 +669,58 @@ export default function App() {
         })
       });
 
-      // Listen to SSE progress
-      listenToBatchProgress(batchId);
+      // SSE plus independent status polling; remember identifiers, not secrets.
+      listenToBatchProgress(batchId, requestId);
     } catch (err: any) {
-      alert(err.message || 'Error launching batch render');
+      if (!requestId) {
+        alert(err.message || 'Could not initialize a render request. No render was submitted.');
+        return;
+      }
+      if (!submissionRejected && !batchRecoveryRef.current?.ownsRequest(requestId)) return;
+      if (!submissionRejected) batchRecoveryRef.current?.resume();
+      alert(submissionRejected ? (err.message || 'Batch request rejected')
+        : 'Could not confirm submission. Recovery is checking the laptop; do not start a duplicate batch.');
     } finally {
+      renderLaunchLock.current = false;
       setIsLaunchingRender(false);
     }
   };
 
   const handleRetryBatchClip = async (clipIndex?: number) => {
-    if (!batchProgress?.batch_id) return;
+    if (!batchProgress?.batch_id || batchProgress.overall_status === 'running'
+      || batchProgress.can_retry === false || renderLaunchLock.current || batchRecoveryRef.current?.isBlocked()) return;
     const batchId = batchProgress.batch_id;
+    renderLaunchLock.current = true;
+    setIsLaunchingRender(true);
     try {
-      // Optimistically update the UI to show 'pending' / retrying state for selected clip(s)
-      setBatchProgress(prev => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          overall_status: 'running',
-          clips: prev.clips.map(c => {
-            if (clipIndex === undefined || c.clip_index === clipIndex) {
-              if (c.status === 'error' || c.status === 'pending') {
-                return { ...c, status: 'pending', progress_percent: 0, error: undefined };
-              }
-            }
-            return c;
-          })
-        };
-      });
-
       const userCookies = getStoredCookies();
       const resp = await fetch(`/api/render-batch/${batchId}/retry`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(20000),
         body: JSON.stringify({
           clip_indices: clipIndex !== undefined ? [clipIndex] : undefined,
           cookies: userCookies || undefined,
         }),
       });
-
+      if (!batchRecoveryRef.current?.isWatching(batchId)) return;
       if (!resp.ok) {
         const errJson = await resp.json().catch(() => ({}));
         throw new Error(errJson.detail || 'Failed to retry rendering');
       }
-
-      // Reconnect SSE to track retry progress
-      listenToBatchProgress(batchId);
+      setBatchProgress(prev => prev ? {
+        ...prev, overall_status: 'running',
+        clips: prev.clips.map(c => c.status === 'error' && (clipIndex === undefined || c.clip_index === clipIndex)
+          ? { ...c, status: 'pending', progress_percent: 0, error: undefined, error_message: undefined } : c),
+      } : null);
     } catch (err: any) {
-      alert(err.message || 'Error retrying clip rendering');
+      if (!batchRecoveryRef.current?.isWatching(batchId)) return;
+      alert(err.message || 'Could not confirm the retry. Checking status before allowing another render.');
+    } finally {
+      // A lost retry response may still mean the laptop accepted it.
+      if (batchRecoveryRef.current?.isWatching(batchId)) listenToBatchProgress(batchId);
+      renderLaunchLock.current = false;
+      setIsLaunchingRender(false);
     }
   };
 
@@ -665,6 +752,14 @@ export default function App() {
   const trackingInterval = useRef<number | null>(null);
   const clipEndIntervalRef = useRef<number | null>(null);
   const loadingSectionRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (page === 'clips') return;
+    try { playerRef.current?.pauseVideo?.(); } catch { /* Player may still be initializing. */ }
+    directVideoPlayerRef.current?.pause();
+    stopTracking();
+    if (clipEndIntervalRef.current !== null) clearInterval(clipEndIntervalRef.current);
+  }, [page]);
   const [toastMessage, setToastMessageState] = useState<string | null>(null);
   const toastTimeoutRef = useRef<number | null>(null);
 
@@ -769,6 +864,8 @@ export default function App() {
 
   // Fetch available AI models when API key is detected/entered
   useEffect(() => {
+    // Completed handoffs require neither a Gemini key nor model discovery.
+    if (initialHandoffHash.current.startsWith('#clip=')) return;
     const fetchModels = async () => {
       const cleanKey = apiKey.trim();
       if (!cleanKey || cleanKey.length < 20 || cleanKey.toLowerCase() === 'mock') {
@@ -777,7 +874,10 @@ export default function App() {
       }
       setLoadingModels(true);
       try {
-        const res = await resilientFetch(`/api/models?api_key=${encodeURIComponent(cleanKey)}`, {
+        const res = await resilientFetch('/api/models', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ api_key: cleanKey }),
           maxRetries: 3,
           retryDelay: 800,
           silent: true
@@ -932,6 +1032,57 @@ export default function App() {
     refreshHistory();
   }, []);
 
+  // AuthGate mounts App after login without changing the private URL fragment.
+  useEffect(() => {
+    const controller = new AbortController();
+    let playerTimer: ReturnType<typeof setTimeout> | undefined;
+    void importClipHandoff({
+      hash: initialHandoffHash.current,
+      storage: localStorage,
+      signal: controller.signal,
+      onError: message => { if (!controller.signal.aborted) setError(message); },
+      onImport: handoff => {
+        if (controller.signal.aborted) return;
+        destroyPlayer();
+        setSourceMode('youtube');
+        setUrl(handoff.source_url);
+        setGdriveUrl('');
+        setUploadedVideoFile(null);
+        setUploadedVideoInfo(null);
+        setDurationPref(handoff.preset.duration);
+        setSelectedModel(handoff.preset.model);
+        setClipCountMode('auto');
+        setCustomPrompt('');
+        setRangeType('entire');
+        setCustomRangeStart('');
+        setCustomRangeEnd('');
+        setSubtitlesSource('youtube');
+        setManualSubtitlesContent('');
+        setManualSubtitlesFileName('');
+        setSubtitleEdits({});
+        setResult(handoff.analysis);
+        navigate('clips');
+        setActiveClip(handoff.analysis.clips[0] ?? null);
+        setCurrentTime(0);
+        setCurrentStep(4);
+        setStepProgress({ 1: 100, 2: 100, 3: 100, 4: 100 });
+        setOverallProgress(100);
+        setActiveProcessingModel(handoff.preset.model);
+        setAiStage('Imported completed analysis');
+        setAiDetail('Ready to edit. No new analysis was requested.');
+        setLoadingDetails('Clip handoff loaded.');
+        setLoading(false);
+        setError(null);
+        setShowHistory(false);
+        refreshHistory();
+        playerTimer = setTimeout(() => {
+          if (!controller.signal.aborted) initPlayer(handoff.analysis.video_id, true);
+        }, 100);
+      },
+    });
+    return () => { controller.abort(); clearTimeout(playerTimer); };
+  }, []);
+
   const loadFromHistory = (entry: HistoryEntry) => {
     const rangeSuffix = entry.range_suffix || '';
     const cacheKey = `cheat_clip_cache_${entry.video_id}_${entry.duration_pref}${rangeSuffix}`;
@@ -1040,6 +1191,7 @@ export default function App() {
           setStepProgress({ 1: 100, 2: 100, 3: 100, 4: 100 });
           setOverallProgress(100);
           setResult(data);
+          navigate('clips');
           setLoading(false);
           setShowHistory(false);
           if (data.clips?.length > 0) setActiveClip(data.clips[0]);
@@ -1186,7 +1338,7 @@ export default function App() {
       if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
         setCurrentTime(playerRef.current.getCurrentTime());
       }
-    }, 200);
+    }, 30);
   };
 
   const stopTracking = () => {
@@ -1477,6 +1629,7 @@ export default function App() {
           await new Promise(r => setTimeout(r, 250));
 
           setResult(parsedData);
+          navigate('clips');
           setLoading(false);
 
           if (parsedData.clips && parsedData.clips.length > 0) {
@@ -1640,18 +1793,11 @@ export default function App() {
       }
 
       setResult(resultData);
+      navigate('clips');
       setLoading(false);
 
       if (resultData.clips?.length > 0) setActiveClip(resultData.clips[0]);
       setTimeout(() => initPlayer(resultData!.video_id), 100);
-
-      // Scroll smoothly to the dashboard so results are immediately visible
-      setTimeout(() => {
-        const dashboard = document.querySelector('.dashboard-grid');
-        if (dashboard) {
-          dashboard.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-      }, 250);
 
     } catch (err: any) {
       const msg = String(err?.message || '');
@@ -1840,19 +1986,46 @@ export default function App() {
   };
 
   const handleApplyAdjustedClipToResults = (adjustedClip: ViralClip) => {
-    if (result && result.clips && trimmerClip) {
-      setResult(prev => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          clips: prev.clips.map(c =>
-            (c.start_time === trimmerClip.start_time && c.end_time === trimmerClip.end_time)
-              ? adjustedClip
-              : c
-          )
-        };
-      });
+    if (!trimmerClip || !Number.isFinite(adjustedClip.start_time) || !Number.isFinite(adjustedClip.end_time) ||
+        adjustedClip.start_time < 0 || adjustedClip.end_time <= adjustedClip.start_time ||
+        (result?.duration && adjustedClip.end_time > result.duration)) return;
+
+    const oldKey = `${trimmerClip.start_time}_${trimmerClip.end_time}`;
+    const newKey = `${adjustedClip.start_time}_${adjustedClip.end_time}`;
+
+    // Avoid duplicate timestamp identities, used by the current selection system.
+    if (result?.clips.some(c =>
+      (c.start_time !== trimmerClip.start_time || c.end_time !== trimmerClip.end_time) &&
+      c.start_time === adjustedClip.start_time && c.end_time === adjustedClip.end_time
+    )) {
+      setError('Rentang waktu ini sudah digunakan klip lain. Pilih rentang yang berbeda.');
+      return;
     }
+
+    setResult(prev => prev ? ({
+      ...prev,
+      clips: prev.clips.map(c =>
+        c.start_time === trimmerClip.start_time && c.end_time === trimmerClip.end_time
+          ? adjustedClip : c
+      ),
+    }) : prev);
+    setActiveClip(prev => prev && prev.start_time === trimmerClip.start_time &&
+      prev.end_time === trimmerClip.end_time ? adjustedClip : prev);
+    setSubtitleEdits(prev => {
+      if (oldKey === newKey || prev[oldKey] === undefined) return prev;
+      const next = {...prev};
+      // New boundaries invalidate the previous timing; only retain words entirely inside the new interval.
+      next[newKey] = prev[oldKey].filter(w => w.start >= adjustedClip.start_time && w.end <= adjustedClip.end_time);
+      delete next[oldKey];
+      return next;
+    });
+    setMarkedClips(prev => {
+      if (oldKey === newKey) return prev;
+      const next = { ...prev };
+      if (next[oldKey]) next[newKey] = true;
+      delete next[oldKey];
+      return next;
+    });
   };
 
   const handleDownloadRawClip = async (clip: ViralClip, e?: React.MouseEvent, forceProceed = false) => {
@@ -2163,7 +2336,7 @@ Transcript:
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(result.clips, null, 2));
     const downloadAnchor = document.createElement('a');
     downloadAnchor.setAttribute("href", dataStr);
-    downloadAnchor.setAttribute("download", `cheat_clip_pro_${result.video_id}.json`);
+    downloadAnchor.setAttribute("download", `void_cut_${result.video_id}.json`);
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
@@ -2197,7 +2370,7 @@ Transcript:
     const dataStr = "data:text/plain;charset=utf-8," + encodeURIComponent(srtText);
     const downloadAnchor = document.createElement('a');
     downloadAnchor.setAttribute("href", dataStr);
-    downloadAnchor.setAttribute("download", `cheat_clip_pro_${result.video_id}.srt`);
+    downloadAnchor.setAttribute("download", `void_cut_${result.video_id}.srt`);
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
@@ -2312,13 +2485,13 @@ Transcript:
     }
   }, [activeClip]);
 
-  // Find current subtitle line with slight gap tolerance to prevent jitter
+  // Half-open boundaries prevent the previous line hiding the next one.
   const currentSubtitle = result?.transcript?.find(
-    line => currentTime >= (line.start - 0.05) && currentTime <= (line.end + 0.25)
+    line => currentTime >= line.start && currentTime < line.end
   );
 
   return (
-    <div className="app-container">
+    <div className="app-container void-cut-app">
       {/* Toast Notification */}
       {toastMessage && (
         <div className="toast-msg" role="status" aria-live="polite">
@@ -2340,21 +2513,14 @@ Transcript:
 
       {/* Header Area */}
       <header className="app-header">
-        <div className="header-logo">
-          <span className="logo-emoji">⚡</span>
+        <button type="button" className="header-logo void-brand" onClick={() => navigate('source')} aria-label="Void Cut home">
           <div>
             <div className="logo-title-row">
-              <h1 className="text-gradient logo-title">CHEAT CLIP</h1>
-              <span className="pro-badge" title="Cheat Clip Pro Edition">
-                <svg className="pro-badge-icon" width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M5 16L3 5L8.5 10L12 4L15.5 10L21 5L19 16H5M19 19C19 19.6 18.6 20 18 20H6C5.4 20 5 19.6 5 19V17H19V19Z" />
-                </svg>
-                PRO
-              </span>
+              <h1 className="logo-title"><img className="void-brand-image" src="/void-cut-logo.png" alt="Void Cut" /></h1>
             </div>
-            <p className="header-subtitle">{t.header.subtitle}</p>
+            <p className="header-subtitle">{language === 'id' ? 'Satu video. Banyak cerita.' : 'One video. More stories.'}</p>
           </div>
-        </div>
+        </button>
         <div className="header-nav" style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
           <button
             type="button"
@@ -2441,6 +2607,10 @@ Transcript:
               <span>🔄 {t.header.updateBtn}</span>
             </button>
           )}
+          <button type="button" className="cookie-header-btn" onClick={() => setSocialAccountsOpen(true)}
+            style={{padding:'0.5rem 0.85rem',border:'1px solid #337bad',borderRadius:8,background:'#173451',color:'#e0f2fe',cursor:'pointer'}}>
+            Login YouTube / TikTok
+          </button>
           <LanguageSwitcher />
           <a
             href="https://tako.id/johansa"
@@ -2456,16 +2626,39 @@ Transcript:
               background: 'linear-gradient(135deg, var(--secondary) 0%, #f43f5e 100%)'
             }}
           >
-            🐈‍⬛ {t.header.supportProject}
+            {language === 'id' ? 'Dukung kreator asal' : 'Support original creator'}
           </a>
         </div>
       </header>
 
+      <WorkflowNavigation page={page} onNavigate={navigate} hasAnalysis={Boolean(result)}
+        selectedCount={markedClipsList.length} loading={loading}
+        rendering={isLaunchingRender || batchProgress?.overall_status === 'running'} />
+
+      <div className="workflow-page workflow-exports" hidden={page !== 'exports'}>
+      {isLaunchingRender && <p className="workflow-render-launch" role="status">{language === 'id' ? 'Menyiapkan render…' : 'Preparing your render…'}</p>}
+      <BatchRenderRecoveryPanel
+        onUpload={(batchId,clip) => setSocialUploadClip({batchId,clip})}
+        batch={batchProgress}
+        connection={renderConnection}
+        onRefresh={() => batchRecoveryRef.current?.resume()}
+        onRestore={batchId => {
+          if (batchRecoveryRef.current?.isBlocked() && batchProgress?.batch_id !== batchId
+            && !window.confirm('Switch recovery to a different batch? The previous batch may still be running.')) return;
+          listenToBatchProgress(batchId);
+        }}
+        onDismiss={dismissBatchProgress}
+        onRetry={renderRecoveryBlocked || isLaunchingRender || batchProgress?.can_retry === false ? undefined : handleRetryBatchClip}
+      />
+      </div>
+
+      <div className="workflow-page workflow-source" hidden={page !== 'source'}>
+      <div className="workflow-source-controls" hidden={loading}>
       {/* Main Form controls panel */}
-      <section className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-        <form onSubmit={handleAnalyze} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+      <section className="glass-panel analysis-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        <form className="analysis-form" onSubmit={handleAnalyze} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
           {/* Source Selector Tabs: YouTube vs Google Drive vs Upload Video File */}
-          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.25rem', flexWrap: 'wrap' }}>
+          <div className="analysis-source-tabs" style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.25rem', flexWrap: 'wrap' }}>
             {/* YouTube Tab */}
             <button
               type="button"
@@ -2571,7 +2764,7 @@ Transcript:
           {sourceMode === 'youtube' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', width: '100%' }}>
               <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.form.urlLabel}</label>
-              <div className="form-main-input-row" style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+              <div className="form-main-input-row">
                 <input
                   id="youtube-url-input"
                   type="text"
@@ -2614,7 +2807,7 @@ Transcript:
           {sourceMode === 'gdrive' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', width: '100%' }}>
               <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.form.gdriveUrlLabel}</label>
-              <div className="form-main-input-row" style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+              <div className="form-main-input-row">
                 <input
                   id="gdrive-url-input"
                   type="text"
@@ -2747,7 +2940,7 @@ Transcript:
                   </button>
                 </div>
               ) : (
-                <div style={{
+                <div className="analysis-upload-summary" style={{
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
@@ -2786,7 +2979,7 @@ Transcript:
                       }}>
                         {uploadedVideoFile?.name || uploadedVideoInfo?.filename}
                       </div>
-                      <div style={{ display: 'flex', gap: '0.5rem', fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.2rem', alignItems: 'center' }}>
+                      <div className="analysis-upload-meta" style={{ display: 'flex', gap: '0.5rem', fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.2rem', alignItems: 'center' }}>
                         {uploadedVideoFile && (
                           <span>📦 {(uploadedVideoFile.size / (1024 * 1024)).toFixed(1)} MB</span>
                         )}
@@ -2799,7 +2992,7 @@ Transcript:
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <div className="analysis-upload-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                     <button
                       type="button"
                       onClick={() => {
@@ -2857,21 +3050,21 @@ Transcript:
             </div>
           )}
 
-          <div className="form-settings-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem' }}>
+          <div className="form-settings-grid">
             {/* Card 1: AI Engine Configuration */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', padding: '1.25rem', borderRadius: '12px', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.04)' }}>
+            <div className="analysis-settings-card" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', padding: '1.25rem', borderRadius: '12px', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.04)' }}>
               <h3 style={{ fontSize: '0.9rem', color: 'var(--primary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.25rem' }}>
                 🤖 {t.form.aiSettingsTitle}
               </h3>
               
               {/* API Key input — required */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <label style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                  <span>
+                <div className="api-key-label" style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                  <label htmlFor="gemini-key-input">
                     {t.form.apiKeyLabel}
                     <span style={{ marginLeft: '0.4rem', fontSize: '0.7rem', fontWeight: 700, color: '#f87171', background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '4px', padding: '0.1rem 0.35rem', letterSpacing: '0.04em' }}>{t.form.apiKeyRequired}</span>
-                  </span>
-                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  </label>
+                  <div className="api-key-actions" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                     <a
                       href="https://aistudio.google.com/"
                       target="_blank"
@@ -2882,14 +3075,18 @@ Transcript:
                       🔑 {t.form.getFreeKey}
                     </a>
                     <span style={{ color: 'rgba(255,255,255,0.15)', fontSize: '0.75rem' }}>|</span>
-                    <span
+                    <button
+                      type="button"
+                      className="api-key-toggle"
+                      aria-controls="gemini-key-input"
+                      aria-pressed={showApiKey}
                       onClick={() => setShowApiKey(!showApiKey)}
-                      style={{ cursor: 'pointer', color: 'var(--primary)', fontSize: '0.75rem' }}
+                      style={{ cursor: 'pointer', color: 'var(--primary)', fontSize: '0.75rem', background: 'none', border: 'none', fontFamily: 'inherit' }}
                     >
                       {showApiKey ? t.form.hideKey : t.form.showKey}
-                    </span>
+                    </button>
                   </div>
-                </label>
+                </div>
                 <input
                   id="gemini-key-input"
                   type={showApiKey ? 'text' : 'password'}
@@ -2957,7 +3154,7 @@ Transcript:
             </div>
 
             {/* Card 2: Clip Parameters & Focus */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', padding: '1.25rem', borderRadius: '12px', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.04)' }}>
+            <div className="analysis-settings-card" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', padding: '1.25rem', borderRadius: '12px', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.04)' }}>
               <h3 style={{ fontSize: '0.9rem', color: 'var(--secondary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.25rem' }}>
                 ⚡ {t.form.clipCustomizationTitle}
               </h3>
@@ -3120,9 +3317,9 @@ Transcript:
           </div>
 
           {/* Subtitles Source Section */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', borderTop: '1px solid var(--border-color)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
+          <div className="analysis-options-section" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', borderTop: '1px solid var(--border-color)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
             <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.form.subtitlesSource}</label>
-            <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            <div className="analysis-options-row" style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', cursor: 'pointer' }}>
                 <input
                   type="radio"
@@ -3147,7 +3344,7 @@ Transcript:
               </label>
 
               {subtitlesSource === 'manual' && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <div className="analysis-subtitle-upload" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                   <input
                     type="file"
                     accept=".srt,.txt"
@@ -3205,9 +3402,9 @@ Transcript:
           </div>
 
           {/* Custom Search Range Section */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', borderTop: '1px solid var(--border-color)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
+          <div className="analysis-options-section" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', borderTop: '1px solid var(--border-color)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
             <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.form.analysisRange}</label>
-            <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            <div className="analysis-options-row" style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', cursor: 'pointer' }}>
                 <input
                   type="radio"
@@ -3232,7 +3429,7 @@ Transcript:
               </label>
 
               {rangeType === 'custom' && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <div className="analysis-range-inputs" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                   <input
                     type="text"
                     className="form-input"
@@ -3271,7 +3468,7 @@ Transcript:
           aria-label="Previously analyzed clips"
         >
           {/* Header Row */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+          <div className="history-panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
             <div
               style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', userSelect: 'none' }}
               onClick={() => setShowHistory(h => !h)}
@@ -3301,9 +3498,9 @@ Transcript:
             </div>
 
             {/* Actions: Search bar, Clear All, Collapse Toggle */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <div className="history-panel-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
               {/* Search Bar */}
-              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <div className="history-search" style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
                 <span style={{ position: 'absolute', left: '0.75rem', fontSize: '0.85rem', color: 'var(--text-muted)', pointerEvents: 'none' }}>
                   🔍
                 </span>
@@ -3630,6 +3827,7 @@ Transcript:
         </section>
       )}
 
+      </div>
       {/* Error state */}
       {error && (
         <section className="glass-panel" style={{ borderColor: 'rgba(239, 68, 68, 0.3)', background: 'rgba(239, 68, 68, 0.05)' }}>
@@ -3964,6 +4162,8 @@ Transcript:
         </section>
       )}
 
+      </div>
+      <div className="workflow-page workflow-clips" hidden={page !== 'clips'}>
       {/* Dashboard Section - Video Player, Timeline, and Clip list */}
       {result && (
         <main className="dashboard-grid">
@@ -4782,6 +4982,7 @@ Transcript:
       )}
 
       {/* Global CSS spinner keyframe animation injection */}
+      </div>
       <style>{`
         @keyframes spin {
           0% { transform: rotate(0deg); }
@@ -4802,9 +5003,28 @@ Transcript:
           color: var(--primary) !important;
         }
       `}</style>
-      {/* Embedded Clip Studio Section with side inline batch progress */}
+      {subtitleEditingClip && result && <SubtitleEditor
+        key={`${subtitleSourceKey}|${subtitleClipKey(subtitleEditingClip)}`}
+        clip={subtitleEditingClip}
+        transcript={result.transcript || []}
+        initialWords={subtitleEdits[subtitleClipKey(subtitleEditingClip)]}
+        onSync={() => handleSyncSubtitles(subtitleEditingClip)}
+        isSyncing={isSyncingSubtitles}
+        onClose={()=>setSubtitleEditingClip(null)}
+        onSave={words=>{setSubtitleEdits(old=>({...old,[subtitleClipKey(subtitleEditingClip)]:words}));setSubtitleEditingClip(null);}}
+      />}
+      {socialUploadClip && <SocialUploadModal
+        key={`${socialUploadClip.batchId}:${socialUploadClip.clip.clip_index}`}
+        batchId={socialUploadClip.batchId} clip={socialUploadClip.clip}
+        onClose={closeSocialUpload}
+      />}
+      {socialAccountsOpen && <SocialUploadModal onClose={closeSocialAccounts} />}
+      <div className="workflow-page workflow-studio" hidden={page !== 'studio'}>
+      {/* Keep Studio mounted across navigation to preserve unsaved settings. */}
       {result && (
         <ClipStudioSection
+          isActive={page === 'studio'}
+          onOpenExports={() => navigate('exports')}
           videoUrl={result.video_url || url}
           videoId={result.video_id}
           allClips={result.clips}
@@ -4812,21 +5032,35 @@ Transcript:
           activeClip={activeClip}
           onStartRender={handleStartBatchRender}
           isRendering={isLaunchingRender}
+          recoveryBlocked={renderRecoveryBlocked}
+          recoveryConnection={renderConnection}
+          onCheckRender={() => batchRecoveryRef.current?.resume()}
+          onOpenSocialAccounts={() => setSocialAccountsOpen(true)}
           onToggleMarkClip={(clip) => toggleMarkedClip(`${clip.start_time}_${clip.end_time}`)}
           onToggleAllClips={toggleAllMarkedClips}
           batchProgress={batchProgress}
-          onDismissProgress={() => {
-            if (batchEventSourceRef.current) {
-              batchEventSourceRef.current.close();
-              batchEventSourceRef.current = null;
-            }
-            setBatchProgress(null);
-          }}
-          onRetryClip={handleRetryBatchClip}
+          onDismissProgress={dismissBatchProgress}
+          onRetryClip={renderRecoveryBlocked || isLaunchingRender || batchProgress?.can_retry === false ? undefined : handleRetryBatchClip}
           allowAppUpdates={allowAppUpdates}
           onOpenCookiesModal={() => setIsCookiesModalOpen(true)}
+          onEditClipDuration={(clip) => setTrimmerClip(clip)}
+          onEditTranscript={(clip) => setSubtitleEditingClip(clip)}
+          subtitleEdits={subtitleEdits}
+          onUploadClip={(batchId,clip) => setSocialUploadClip({batchId,clip})}
+          isSyncingSubtitles={isSyncingSubtitles}
+          subtitleSyncError={subtitleSyncError}
+          onSyncSubtitles={(clip) => {
+            void handleSyncSubtitles(clip).then(words => {
+              setSubtitleEdits(old => ({...old, [subtitleClipKey(clip)]: words}));
+            }).catch(() => {});
+          }}
         />
       )}
+      </div>
+      <footer className="workflow-footer">
+        <span>VOID CUT</span>
+        <p>{language === 'id' ? 'Dikembangkan dari' : 'Built on'} <a href="https://github.com/galihjuansaputra/cheat-clip-pro" target="_blank" rel="noopener noreferrer">Cheat Clip PRO</a> · galihjuansaputra &amp; contributors</p>
+      </footer>
 
       {/* Cookie Pre-check Warning Modal */}
       <CookieWarningModal
@@ -4867,8 +5101,8 @@ Transcript:
         videoDuration={result?.duration || 0}
         transcript={result?.transcript}
         onClose={() => setTrimmerClip(null)}
+        onApply={handleApplyAdjustedClipToResults}
         onDownload={async (adjustedClip) => {
-          handleApplyAdjustedClipToResults(adjustedClip);
           await handleDownloadRawClip(adjustedClip);
         }}
       />

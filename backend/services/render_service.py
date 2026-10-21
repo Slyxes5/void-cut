@@ -26,6 +26,34 @@ BATCH_REQUESTS: Dict[str, RenderBatchRequest] = {}
 _RENDER_SEMAPHORE = asyncio.Semaphore(1)
 
 
+
+
+def edited_words_for_clip(clip: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    """Return clip-relative edited words; None means automatic Whisper transcription.
+
+    All edited timestamps must be absolute offsets within the original source.
+    Empty list is a valid intentional edit (no subtitle words).
+    """
+    supplied = clip.get("edited_subtitle_words")
+    if supplied is None:
+        return None
+    start = float(clip.get("start_time", 0))
+    end = float(clip.get("end_time", 0))
+    if not isinstance(supplied, list) or len(supplied) > 10000:
+        raise ValueError("Invalid edited subtitle payload")
+    result = []
+    for item in supplied:
+        if not isinstance(item, dict):
+            raise ValueError("Invalid edited subtitle word")
+        word = str(item.get("word", "")).strip()
+        st = float(item.get("start", -1))
+        et = float(item.get("end", -1))
+        if not (start <= st < et <= end) or len(word) > 250:
+            raise ValueError("Edited subtitle timestamps must be inside source clip")
+        if word:
+            result.append({"word": word, "start": st - start, "end": et - start})
+    return sorted(result, key=lambda w: w["start"])
+
 async def render_single_batch_clip(
     batch_id: str,
     idx: int,
@@ -135,7 +163,8 @@ async def render_single_batch_clip(
         if settings.caption_style != "none" or (display_title and settings.title_position != "none" and not skip_ass_title):
             words = []
             if settings.caption_style != "none":
-                words = await asyncio.to_thread(
+                manual_words = edited_words_for_clip(clip)
+                words = manual_words if manual_words is not None else await asyncio.to_thread(
                     transcribe_clip_words,
                     raw_path,
                     transcript,
@@ -207,9 +236,11 @@ async def render_single_batch_clip(
             hook_sfx_enabled=bool(settings.hook_sfx_enabled),
             hook_sfx_path=settings.hook_sfx_file_path,
             hook_sfx_volume=float((settings.hook_sfx_volume if settings.hook_sfx_volume is not None else 100.0) / 100.0),
+            timeline_sfx=settings.timeline_sfx or [],
             original_audio_volume=float((settings.original_audio_volume if settings.original_audio_volume is not None else 100.0) / 100.0),
             hardware_accel=settings.hardware_accel or "auto",
-            title_y_percent=settings.title_y_percent
+            title_y_percent=settings.title_y_percent,
+            force_square_pixels=settings.force_square_pixels
         )
 
         if not os.path.exists(out_path) or not is_valid_mp4(out_path):
@@ -378,7 +409,8 @@ async def render_merged_batch_clips(
             e_t = float(seg.get("end_time", s_t + 30.0))
             seg_dur = max(0.1, e_t - s_t)
             if settings.caption_style != "none":
-                seg_words = await asyncio.to_thread(
+                manual_words = edited_words_for_clip(seg)
+                seg_words = manual_words if manual_words is not None else await asyncio.to_thread(
                     transcribe_clip_words,
                     part_paths[i],
                     transcript,
@@ -390,7 +422,7 @@ async def render_merged_batch_clips(
                     w_start = float(w.get("start", 0.0))
                     w_end = float(w.get("end", w_start + 0.15))
                     w_copy["start"] = round(total_duration_sec + max(0.0, w_start), 3)
-                    w_copy["end"] = round(max(w_copy["start"] + 0.1, total_duration_sec + max(0.0, w_end)), 3)
+                    w_copy["end"] = round(total_duration_sec + min(seg_dur, w_end), 3)
                     merged_words.append(w_copy)
             total_duration_sec += seg_dur
 
@@ -498,9 +530,11 @@ async def render_merged_batch_clips(
             hook_sfx_enabled=bool(settings.hook_sfx_enabled),
             hook_sfx_path=settings.hook_sfx_file_path,
             hook_sfx_volume=float((settings.hook_sfx_volume if settings.hook_sfx_volume is not None else 100.0) / 100.0),
+            timeline_sfx=settings.timeline_sfx or [],
             original_audio_volume=float((settings.original_audio_volume if settings.original_audio_volume is not None else 100.0) / 100.0),
             hardware_accel=settings.hardware_accel or "auto",
-            title_y_percent=settings.title_y_percent
+            title_y_percent=settings.title_y_percent,
+            force_square_pixels=settings.force_square_pixels
         )
 
         if not os.path.exists(out_path) or not is_valid_mp4(out_path):

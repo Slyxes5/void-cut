@@ -13,6 +13,7 @@ interface ClipTrimmerModalProps {
   transcript?: TranscriptLine[];
   onClose: () => void;
   onDownload: (adjustedClip: ViralClip) => Promise<void> | void;
+  onApply: (adjustedClip: ViralClip) => void;
 }
 
 const formatSeconds = (sec: number): string => {
@@ -56,6 +57,7 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
   transcript = [],
   onClose,
   onDownload,
+  onApply,
 }) => {
   const { t } = useLanguage();
 
@@ -567,6 +569,12 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
     start_time: adjustedStart,
     end_time: adjustedEnd,
   });
+
+  const handleApplyClick = () => {
+    if (isDownloading || adjustedEnd <= adjustedStart) return;
+    onApply(getAdjustedClip());
+    onClose();
+  };
 
   const handleDownloadClick = async () => {
     if (isDownloading) return;
@@ -1550,6 +1558,26 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
               }}
             >
               {t.trimmer.closeBtn}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleApplyClick}
+              disabled={isDownloading || adjustedEnd <= adjustedStart}
+              title="Simpan waktu klip untuk Clip Studio dan rendering tanpa mengunduh video"
+              style={{
+                padding: '0.5rem 1rem',
+                fontSize: '0.84rem',
+                borderRadius: '8px',
+                fontWeight: 700,
+                background: 'linear-gradient(135deg, #16a34a, #15803d)',
+                color: '#fff',
+                border: 'none',
+                cursor: isDownloading ? 'not-allowed' : 'pointer',
+                opacity: isDownloading ? 0.55 : 1
+              }}
+            >
+              ✓ Apply to Clip Studio
             </button>
 
             <button

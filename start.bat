@@ -1,12 +1,12 @@
 @echo off
 setlocal enabledelayedexpansion
-title Cheat Clip PRO
+title Void Cut
 
 :: Change directory safely to current folder (handling spaces in path)
 cd /d "%~dp0"
 
 echo ===================================================
-echo   Starting Cheat Clip PRO (Space & PATH Resilient)
+echo   Starting Void Cut (Space & PATH Resilient)
 echo ===================================================
 
 :: If local venv exists, prepend its Scripts directory to PATH

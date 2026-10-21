@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 class RenderSettingsModel(BaseModel):
     aspect_ratio: str = "9:16"
+    force_square_pixels: bool = False  # Opt-in; preserve existing manual rendering behavior.
     background_style: str = "black"
     enable_face_tracking: bool = True
     streamer_preset: str = "none"
@@ -37,6 +38,7 @@ class RenderSettingsModel(BaseModel):
     hook_sfx_enabled: Optional[bool] = False
     hook_sfx_file_path: Optional[str] = None
     hook_sfx_volume: Optional[float] = 100.0
+    timeline_sfx: Optional[List[Dict[str, Any]]] = None
     # Raw Audio / Voice Boost
     original_audio_volume: Optional[float] = 100.0
     # Watermark

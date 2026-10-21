@@ -59,7 +59,7 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({ isOpen, onClose 
     setIsChecking(true);
     setErrorMessage(null);
     try {
-      const res = await fetch('/api/system/check-update');
+      const res = await fetch('/api/system/check-update', { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
         setInfo(data);

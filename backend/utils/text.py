@@ -417,7 +417,7 @@ def validate_transcript_language(
     if not is_supported:
         error_msg = (
             f"Transkrip video terdeteksi dalam bahasa {name}. "
-            f"Cheat Clip Pro difokuskan khusus untuk video dalam Bahasa Indonesia dan Bahasa Inggris saja."
+            f"Void Cut difokuskan khusus untuk video dalam Bahasa Indonesia dan Bahasa Inggris saja."
         )
     elif expected_video_lang and expected_video_lang in ('id', 'en'):
         exp_code = 'id' if expected_video_lang in ('id', 'in') else 'en'

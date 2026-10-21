@@ -3,10 +3,13 @@ import logging
 import os
 import re
 import uuid
+from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile, status
+from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Response, UploadFile, status
+from pydantic import BaseModel, Field, model_validator
+from backend.security import remember_secret
 from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.config import (
@@ -22,6 +25,71 @@ from backend.config import (
 )
 
 router = APIRouter(tags=["Media"])
+
+
+class SubtitleSyncRequest(BaseModel):
+    video_url: str = Field(min_length=1, max_length=4096)
+    start_time: float = Field(ge=0, allow_inf_nan=False)
+    end_time: float = Field(gt=0, allow_inf_nan=False)
+    cookies: Optional[str] = None
+
+    @model_validator(mode="after")
+    def valid_range(self):
+        if not 0 < self.end_time - self.start_time <= 600:
+            raise ValueError("Subtitle sync requires a clip between 0 and 600 seconds.")
+        return self
+
+
+@router.post("/api/subtitles/sync")
+async def sync_subtitles(body: SubtitleSyncRequest):
+    """Return acoustic word timings on the source clock for both preview and export."""
+    from backend.config import download_clip_segment, transcribe_clip_words
+    from backend.services.render_service import _RENDER_SEMAPHORE
+
+    source = body.video_url.strip()
+    if source.startswith('/api/video/'):
+        local = _find_video_file_on_disk(source[len('/api/video/'):])
+        if not local or not local.is_file() or not _is_safe_path(local):
+            raise HTTPException(status_code=404, detail="Video sumber tidak ditemukan.")
+        source = str(local.resolve())
+    else:
+        try:
+            parsed = urlsplit(source)
+            port = parsed.port
+        except ValueError:
+            raise HTTPException(status_code=422, detail="URL video tidak valid.")
+        if (parsed.scheme != 'https' or parsed.hostname not in
+                {'youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be'}
+                or parsed.username or parsed.password or port not in (None, 443)):
+            raise HTTPException(status_code=422, detail="Gunakan URL YouTube atau video yang sudah di-upload.")
+
+    remember_secret(body.cookies)
+    filename = f"subtitle_sync_{uuid.uuid4().hex}.mp4"
+    raw_path = TEMP_DIR / filename
+    try:
+        # Share the render gate: model inference and downloads should not compete
+        # with an active export, especially on a CPU-only backend.
+        async with _RENDER_SEMAPHORE:
+            path = await asyncio.to_thread(download_clip_segment, source, body.start_time,
+                                           body.end_time, filename, body.cookies)
+            words = await asyncio.to_thread(transcribe_clip_words, path, None,
+                                           body.start_time, body.end_time, True)
+        result, group, count = [], 0, 0
+        for i, word in enumerate(words):
+            result.append({'id': f'audio-{i}', 'group': group, 'word': word['word'],
+                           'start': body.start_time + word['start'],
+                           'end': min(body.end_time, body.start_time + word['end'])})
+            count += 1
+            if count >= 8 or re.search(r'[.!?]$', word['word']):
+                group, count = group + 1, 0
+        return {"words": result, "timing_source": "audio"}
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Acoustic subtitle sync failed")
+        raise HTTPException(status_code=500, detail="Sinkronisasi gagal. Periksa audio, Whisper, FFmpeg, atau cookies YouTube lalu coba lagi.")
+    finally:
+        raw_path.unlink(missing_ok=True)
 
 
 MAX_VIDEO_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024   # 4 GB
@@ -135,17 +203,24 @@ def _find_video_file_on_disk(file_name: str) -> Optional[Path]:
     import urllib.parse
     clean_name = urllib.parse.unquote(os.path.basename(file_name.split("?")[0])).strip()
     
+    video_extensions = {'.mp4', '.webm', '.mov', '.mkv', '.avi', '.m4v', '.mpeg', '.mpg', '.wmv', '.flv', '.ts'}
+    def allowed_video(path):
+        return path.suffix.lower() in video_extensions and _is_safe_path(path)
+
+    # Video routes must never expose temporary cookie/configuration files.
+    if Path(clean_name).suffix and Path(clean_name).suffix.lower() not in video_extensions:
+        return None
     # Check direct paths
     for base in [UPLOADS_DIR, TEMP_DIR, EXPORTS_DIR]:
         candidate = base / clean_name
-        if candidate.exists() and candidate.is_file() and _is_safe_path(candidate):
+        if candidate.exists() and candidate.is_file() and allowed_video(candidate):
             return candidate
 
     # Search directory listings without regex/glob pitfalls
     all_files: list[Path] = []
     for d in [UPLOADS_DIR, TEMP_DIR, EXPORTS_DIR]:
         if d.exists():
-            all_files.extend([f for f in d.iterdir() if f.is_file() and _is_safe_path(f)])
+            all_files.extend([f for f in d.iterdir() if f.is_file() and allowed_video(f)])
 
     clean_lower = clean_name.lower()
     
@@ -379,7 +454,7 @@ async def get_clip_frame(
     video_id: str,
     timestamp: float = 0.0,
     video_url: Optional[str] = None,
-    cookies: Optional[str] = None
+    cookies: Optional[str] = Header(None, alias='X-YouTube-Cookies')
 ):
     """
     Returns an extracted real video frame at timestamp for the real video preview.
@@ -402,7 +477,7 @@ async def detect_face(
     video_url: Optional[str] = None,
     facecam_position: Optional[str] = "auto",
     streamer_preset: Optional[str] = "none",
-    cookies: Optional[str] = None
+    cookies: Optional[str] = Header(None, alias='X-YouTube-Cookies')
 ):
     """
     Detects speaker face coordinates (cx, cy, w, h) on the video at timestamp.
@@ -449,6 +524,21 @@ async def detect_face(
         logger.warning(f"Face detection API error: {e}")
 
     return default_res
+
+
+class FaceDetectionRequest(BaseModel):
+    video_id: str
+    timestamp: float = 0.0
+    video_url: Optional[str] = None
+    facecam_position: str = 'auto'
+    streamer_preset: str = 'none'
+    cookies: Optional[str] = None
+
+
+@router.post('/api/detect-face')
+async def detect_face_with_body(request: FaceDetectionRequest):
+    remember_secret(request.cookies)
+    return await detect_face(**request.model_dump())
 
 
 @router.post("/api/upload-font")

@@ -1,5 +1,5 @@
 # ==============================================================================
-# Multi-stage Dockerfile for CheatClip Pro (React + Vite + FastAPI + FFmpeg)
+# Multi-stage Dockerfile for Void Cut (React + Vite + FastAPI + FFmpeg)
 # ==============================================================================
 
 # ── Stage 1: Build React Frontend ─────────────────────────────────────────────

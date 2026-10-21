@@ -1,0 +1,156 @@
+/* Void Cut: warm surfaces around the existing video and caption previews. */
+:root {
+  color-scheme: light;
+  color: #302b27;
+  background: #f5f1e9;
+  --bg-main: #f5f1e9;
+  --bg-surface: #fffdf9;
+  --bg-surface-hover: #efe9df;
+  --border-color: #ded7cb;
+  --border-color-glow: #d8c2ad;
+  --primary: #a34c2c;
+  --primary-glow: rgb(163 76 44 / 12%);
+  --secondary: #80543c;
+  --secondary-glow: rgb(128 84 60 / 12%);
+  --accent: #326d50;
+  --text-primary: #302b27;
+  --text-secondary: #6a6158;
+  --text-muted: #7a7065;
+}
+body { background-image: none; }
+[hidden] { display: none !important; }
+button, input, select, textarea { font-family: inherit; }
+button:focus-visible, a:focus-visible { outline: 3px solid #ad6243; outline-offset: 4px; }
+button:disabled { cursor: not-allowed; }
+::-webkit-scrollbar-thumb { background: #c6bcaf; }
+
+.void-cut-app { max-width: 1480px; gap: 1.5rem; padding: 1.5rem 2.5rem; }
+.void-cut-app .app-header { margin-bottom: 0; padding-bottom: 1.25rem; border-bottom: 1px solid var(--border-color); gap: 1.5rem; }
+.void-brand { border: 0; background: transparent; text-align: left; cursor: pointer; padding: 0; flex-shrink: 0; }
+.void-brand-image { display: block; width: 162px; height: 54px; object-fit: cover; border-radius: 8px; }
+.void-cut-app .header-subtitle { color: var(--text-secondary); margin-top: .35rem; font-size: .75rem; }
+.void-cut-app .header-nav { justify-content: flex-end; flex-wrap: wrap; gap: .5rem !important; }
+.void-cut-app .cookie-header-btn { background: #fffdf9 !important; border: 1px solid var(--border-color) !important; color: var(--text-secondary) !important; box-shadow: none !important; }
+.void-cut-app .header-nav > a { background: #e9dfd2 !important; color: #674630; box-shadow: none !important; }
+
+.workflow-nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .5rem; padding: .4rem; background: #eae4d9; border: 1px solid #e0d8cb; border-radius: 15px; }
+.workflow-step { display: flex; align-items: center; gap: .75rem; min-height: 54px; padding: .65rem 1rem; border: 1px solid transparent; border-radius: 10px; background: transparent; color: #6e6256; font-size: .88rem; font-weight: 600; cursor: pointer; transition: background .15s, color .15s; }
+.workflow-step:hover:not(:disabled) { background: #f5efe5; }
+.workflow-step.is-current { background: #fffdf9; border-color: #e3d9cb; color: #843b23; box-shadow: 0 2px 6px rgb(70 49 25 / 4%); }
+.workflow-step:disabled { opacity: .48; }
+.workflow-step-number { font-size: .72rem; font-weight: 700; letter-spacing: .05em; opacity: .65; }
+.workflow-live-dot { width: 7px; height: 7px; border-radius: 50%; background: #39825c; margin-left: auto; }
+.workflow-heading { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; padding: 1rem 0 .5rem; }
+.workflow-eyebrow { font-size: .68rem; text-transform: uppercase; font-weight: 700; letter-spacing: .14em; color: #8f5137; margin-bottom: .6rem; }
+.workflow-eyebrow span { color: #b8a692; padding: 0 .5rem; }
+.workflow-heading h2 { font-size: clamp(1.65rem, 3vw, 2.5rem); line-height: 1.2; font-weight: 600; outline: none; color: #302b27; }
+.workflow-description { margin-top: .6rem; font-size: .9rem; color: var(--text-secondary); max-width: 640px; }
+.workflow-heading-actions { display: flex; align-items: center; justify-content: flex-end; gap: .7rem; flex-wrap: wrap; }
+.workflow-primary, .workflow-secondary { min-height: 42px; padding: .65rem 1rem; border: 1px solid var(--border-color); border-radius: 9px; font-size: .82rem; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.workflow-primary { background: #a34c2c; border-color: #a34c2c; color: #fff; }
+.workflow-primary:hover:not(:disabled) { background: #883d23; }
+.workflow-primary:disabled { opacity: .4; }
+.workflow-secondary { background: #fffdf9; color: #574d43; }
+.workflow-secondary:hover { background: #eee5d9; }
+.workflow-selection { font-size: .78rem; color: var(--text-secondary); }
+.workflow-page, .workflow-source-controls { min-width: 0; display: flex; flex-direction: column; gap: 1.25rem; }
+.workflow-footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border-top: 1px solid var(--border-color); margin-top: auto; padding: 1.5rem 0 .25rem; color: var(--text-muted); font-size: .72rem; }
+.workflow-footer > span { font-weight: 700; letter-spacing: .13em; }
+.workflow-footer a { color: #80543c; text-decoration: underline; text-underline-offset: 3px; }
+.workflow-render-launch { color: var(--primary); padding: .75rem 1rem; background: #ece0d1; border-radius: 9px; }
+
+.void-cut-app .glass-panel { box-shadow: 0 3px 15px rgb(60 44 22 / 4%); backdrop-filter: none; border-color: var(--border-color); }
+.void-cut-app .glass-panel:hover { border-color: #d2c4b2; }
+.void-cut-app .text-gradient { background: none; color: #9c4d30; -webkit-text-fill-color: currentColor; filter: none; }
+.void-cut-app .glowing-btn { background: #a34c2c; color: #fff; box-shadow: none; }
+.void-cut-app .analysis-panel { max-width: 1040px; width: 100%; margin: 0 auto; }
+.void-cut-app .form-input, .void-cut-app input:not([type=range]):not([type=checkbox]):not([type=radio]):not([type=color]), .void-cut-app textarea, .void-cut-app select { background-color: #fffcf7; color: #393027; border-color: #d4c9ba; }
+.void-cut-app input::placeholder, .void-cut-app textarea::placeholder { color: #8c8175; }
+.void-cut-app .source-tab-btn { color: #6a6158 !important; background: #f4eee5 !important; border-color: #dfd5c7 !important; box-shadow: none !important; }
+.void-cut-app .source-tab-btn.active { color: #843b23 !important; background: #f0dfcf !important; border-color: #cba88d !important; }
+.void-cut-app .history-highlight-panel { background: #eee7dc; border-color: #d8cab8; box-shadow: none; margin: 0; }
+.void-cut-app .history-entry-card { background: #fffdf9; border-color: #e2d8ca; box-shadow: none; }
+.void-cut-app .history-search-input { color: #302b27; }
+.void-cut-app .dashboard-grid { margin-top: 0; gap: 1.25rem; }
+.void-cut-app .clip-card { background: #fffdf9; border-color: #dfd6c9; box-shadow: none; }
+.void-cut-app .clip-card.active, .void-cut-app .clip-card:hover { background: #fbf3e8; border-color: #c39c80; }
+.void-cut-app .clip-quotes, .void-cut-app .transcript-box, .void-cut-app .clip-suggestions { background: #f5efe6; color: #605247; border-color: #e0d4c4; }
+.void-cut-app .quote-item { color: #6b5544; }
+.void-cut-app .suggestion-value { color: #4e4339; }
+.void-cut-app .score-badge { color: #854024; background: #f4e0ca; border-color: #e1bd98; }
+.void-cut-app .clip-actions button, .void-cut-app .copy-mini-btn { color: #785036; }
+.void-cut-app .video-wrapper { background: #151412; }
+
+.void-cut-app .clip-studio-page-section { margin: 0; background: #fffdf9; }
+.void-cut-app .clip-studio-page-section::before { display: none; }
+.void-cut-app .duration-selector { background: #eae2d6; border-color: #d9cdbb; }
+.void-cut-app .duration-btn { color: #6d5d4e; }
+.void-cut-app .duration-btn.active { background: #fffdf9; color: #843b23; box-shadow: 0 1px 5px rgb(80 50 20 / 10%); }
+.void-cut-app .streamer-btn { color: #6d5d4e; border-color: #ddd0bd; background: #f3ecdf; }
+.void-cut-app .streamer-btn.active { color: #7e4027; background: #f0dfca; border-color: #b78962; box-shadow: none; }
+.void-cut-app .aspect-icon-box { border-color: #a47855; }
+.void-cut-app .preview-clip-picker-bar { border-color: #ddd0bd; background: #f3ecdf; }
+.void-cut-app .preview-clip-select option { color: #302b27; background: #fffdf9; }
+.void-cut-app .slider-quick-buttons { flex-wrap: wrap; }
+.void-cut-app .caption-style-card { min-width: 0; }
+.void-cut-app .caption-style-card .caption-style-sub { color: #d4cdc2; }
+.void-cut-app .studio-section-header { padding-bottom: 1rem; border-bottom-color: var(--border-color); }
+.void-cut-app .studio-main-heading { color: #302b27; -webkit-text-fill-color: currentColor; background: none; }
+.void-cut-app .pro-badge { display: none; }
+.void-cut-app .studio-icon-glow { background: #eee2d1; box-shadow: none; border-color: #dfcfb9; }
+.void-cut-app .studio-card-group, .void-cut-app .studio-render-history-card { background: #f8f3eb; border-color: #dfd4c4; box-shadow: none; }
+.void-cut-app .group-title, .void-cut-app .aspect-name, .void-cut-app .info-val, .void-cut-app .history-card-title, .void-cut-app .mode-btn-title { color: #3e342b; }
+.void-cut-app .group-badge, .void-cut-app .meta-badge { color: #80543c; background: #ecdfcd; border-color: #ddc9ae; }
+.void-cut-app .aspect-card-btn, .void-cut-app .render-mode-btn { background: #fffdf9; border-color: #ded3c3; color: #5d5043; }
+.void-cut-app .aspect-card-btn.active { background: #f0dfcc; border-color: #b5825b; box-shadow: none; }
+.void-cut-app .studio-reset-defaults-btn, .void-cut-app .studio-clear-temp-btn, .void-cut-app .studio-render-another { color: #77503b !important; background: #eee2d2 !important; border-color: #d9c4a8 !important; }
+.void-cut-app .studio-bottom-action-bar { position: static; background: #fffdf9; border: 1px solid #ddd1c0; box-shadow: none; margin-top: 1rem; }
+.void-cut-app .studio-btn-render { background: #a34c2c; color: #fff; }
+.void-cut-app .studio-preview-pane { min-width: 0; }
+.void-cut-app .preview-header-bar, .void-cut-app .player-controls-bar { background: #e9e0d3; border-color: #d8c9b5; }
+.void-cut-app .preview-title { color: #544333; }
+.void-cut-app .render-recovery-panel { background: #fffdf9; }
+.void-cut-app .render-recovery-actions button, .void-cut-app .render-recovery-actions a { background: #eee1d0; border-color: #d6bea1; color: #70462c; }
+.void-cut-app .render-recovery-clips > li { background: #f7f1e8; border-color: #e1d4c2; }
+.void-cut-app .render-client-notice { font-size: .82rem; color: #765c44; }
+
+@media (min-width: 1025px) {
+  .void-cut-app .studio-controls-pane { max-height: 78vh; overflow-y: auto; padding-right: .75rem; scrollbar-gutter: stable; }
+  .void-cut-app .preview-sticky-wrap { position: sticky; top: 1rem; }
+}
+@media (max-width: 900px) {
+  .void-cut-app { padding: 1.25rem; }
+  .void-cut-app .app-header { align-items: flex-start; }
+  .workflow-heading { align-items: flex-start; flex-direction: column; gap: 1rem; }
+  .workflow-heading-actions { justify-content: flex-start; }
+}
+@media (max-width: 600px) {
+  .void-cut-app { padding: .85rem; gap: 1.1rem; }
+  .void-cut-app .app-header { flex-direction: column; gap: .8rem; }
+  .void-cut-app .header-nav { justify-content: flex-start; }
+  .void-cut-app .header-nav > a { display: none; }
+  .workflow-nav { gap: .15rem; padding: .25rem; border-radius: 11px; }
+  .workflow-step { flex-direction: column; align-items: flex-start; gap: .2rem; padding: .65rem .5rem; min-height: 62px; font-size: .69rem; }
+  .workflow-step-number { font-size: .6rem; }
+  .workflow-live-dot { position: absolute; margin-left: 45px; }
+  .workflow-heading { padding-top: .5rem; }
+  .workflow-heading-actions { width: 100%; gap: .5rem; }
+  .workflow-selection { margin-left: auto; }
+  .workflow-heading-actions .workflow-primary { margin-left: auto; }
+  .workflow-description { font-size: .82rem; }
+  .workflow-footer { flex-direction: column; align-items: flex-start; gap: .5rem; line-height: 1.65; }
+  .void-cut-app .analysis-panel { padding: 1rem; }
+  .void-cut-app .clip-studio-page-section { padding: 1rem; }
+  .void-cut-app .studio-workspace-grid { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+  .void-cut-app .studio-workspace-grid > *, .void-cut-app .studio-card-group { min-width: 0; max-width: 100%; }
+  .void-cut-app .studio-card-group { padding: 1rem; }
+  .void-cut-app .studio-preview-pane { width: 100%; max-width: 100%; position: static; }
+  .void-cut-app .studio-header-actions { max-width: 100%; }
+  .void-cut-app .preview-clip-picker-bar { flex-wrap: wrap; max-width: 100%; }
+  .void-cut-app .preview-clip-select { min-width: 0; width: 100%; max-width: 100%; }
+  .void-cut-app .caption-styles-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .void-cut-app .phone-wireframe-container { max-width: 100%; overflow: hidden; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .void-cut-app *, .void-cut-app *::before, .void-cut-app *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}

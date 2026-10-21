@@ -15,8 +15,9 @@ import tempfile
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Union, Callable
 from PIL import Image, ImageDraw, ImageFont
+from backend.subtitle_timing import normalize_words, caption_chunks, transcript_words
 
-logger = logging.getLogger("cheat-clip-pro.video-engine")
+logger = logging.getLogger("void-cut.video-engine")
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMP_DIR = BASE_DIR / "temp_clips"
@@ -57,7 +58,7 @@ def normalize_to_netscape(raw_content: str) -> str:
                 lines = [
                     "# Netscape HTTP Cookie File",
                     "# http://curl.haxx.se/rfc/cookie_spec.html",
-                    "# Converted automatically from JSON format by CheatClip Pro",
+                    "# Converted automatically from JSON format by Void Cut",
                     "",
                 ]
                 count = 0
@@ -96,7 +97,7 @@ def normalize_to_netscape(raw_content: str) -> str:
         header_lines = [
             "# Netscape HTTP Cookie File",
             "# http://curl.haxx.se/rfc/cookie_spec.html",
-            "# Converted automatically from HTTP Cookie header by CheatClip Pro",
+            "# Converted automatically from HTTP Cookie header by Void Cut",
             "",
         ]
         cookie_count = 0
@@ -291,8 +292,9 @@ def get_whisper_model():
     if _WHISPER_MODEL is None:
         try:
             import whisper
-            logger.info("Loading Whisper 'base' model for word-level timestamps...")
-            _WHISPER_MODEL = whisper.load_model("base")
+            model_name = os.environ.get("WHISPER_MODEL", "base")
+            logger.info("Loading Whisper '%s' model for word-level timestamps...", model_name)
+            _WHISPER_MODEL = whisper.load_model(model_name)
         except Exception as e:
             logger.warning(f"Could not load Whisper model: {e}")
             _WHISPER_MODEL = False
@@ -725,7 +727,8 @@ def transcribe_local_video_file(
         transcript_lines.append({
             "text": text,
             "start": start,
-            "duration": dur
+            "duration": dur,
+            "words": normalize_words(seg.get("words", [])),
         })
         
     logger.info(f"Whisper transcribed {len(transcript_lines)} dialogue segments from {p.name}")
@@ -1184,37 +1187,31 @@ def download_full_raw_video(
 
 
 def clean_caption_text(text: str) -> str:
-    """
-    Cleans transcripted subtitle/caption text by:
-    1. Removing sound/action tags like [LAUGHTER], [APPLAUSE], [MUSIC], (laughter), *cheering*.
-    2. Removing common sound effect words if present.
-    3. Stripping all symbols EXCEPT '.', ',', '%', '&', '$', '?' (keeping alphanumeric characters and spaces).
-    4. Normalizing whitespace.
+    """Normalize subtitle text without silently deleting transcript content.
+
+    Sound cues such as [tertawa], (laughing), *cheering* and punctuation
+    are meaningful transcript content. Escaping for ASS is handled separately
+    by escape_ass_text() at the point of writing the subtitle file.
     """
     if not text:
         return ""
-    # 1. Remove bracketed, parenthesized, or asterisk tags (e.g. [LAUGHTER], (music), *cheering*)
-    t = re.sub(r'\[.*?\]|\(.*?\)|[\*].*?[\*]', ' ', text)
-    # 2. Remove common unbracketed sound tags
-    t = re.sub(r'\b(laughter|applause|music|cheering|snickering|giggle|cough)\b', ' ', t, flags=re.IGNORECASE)
-    # 3. Remove all symbols except . , % & $ ? (keep letters, digits, whitespace, . , % & $ ?)
-    # Note: in Python regex \w includes '_', so we explicitly eliminate '_'
-    t = re.sub(r'[^\w\s.,%&$?]|_', '', t)
-    # 4. Collapse multiple spaces
-    t = re.sub(r'\s+', ' ', t).strip()
-    return t
+    # Normalize whitespace and remove non-printable control characters only.
+    # Preserve punctuation, Unicode, brackets and semantic sound cues.
+    t = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", str(text))
+    return re.sub(r"\s+", " ", t).strip()
 
 
 def transcribe_clip_words(
     video_path: str,
     fallback_transcript: Optional[List[Dict[str, Any]]] = None,
     clip_start_time: float = 0.0,
-    clip_end_time: float = 0.0
+    clip_end_time: float = 0.0,
+    require_acoustic: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Transcribes word-level timestamps directly from the sliced clip audio using Whisper AI.
-    Listens directly to the audio waveform of the sliced clip (0.0s = start of clip) for 100% acoustic accuracy.
-    Falls back to transcript distribution only if Whisper AI is not available.
+    Uses the sliced clip's audio clock (0.0s = start of clip).
+    Line-only fallback timestamps are estimates, not acoustic alignment.
     """
     # 1. Primary: Run Whisper directly on sliced clip audio for exact acoustic timestamps
     whisper_model = get_whisper_model()
@@ -1224,7 +1221,8 @@ def transcribe_clip_words(
             result = whisper_model.transcribe(
                 video_path,
                 word_timestamps=True,
-                fp16=False
+                fp16=False,
+                condition_on_previous_text=False,
             )
             words = []
             for segment in result.get("segments", []):
@@ -1232,62 +1230,29 @@ def transcribe_clip_words(
                     word_clean = clean_caption_text(w.get("word", "").strip())
                     if word_clean:
                         st = max(0.0, float(w.get("start", 0.0)))
-                        et = max(st + 0.12, float(w.get("end", st + 0.25)))
+                        et = float(w.get("end", st))
                         words.append({
                             "word": word_clean,
-                            "start": round(st, 2),
-                            "end": round(et, 2)
+                            "start": st,
+                            "end": et,
                         })
-            if words:
-                logger.info(f"Whisper successfully transcribed {len(words)} acoustic words for clip.")
-                return words
+            duration = clip_end_time - clip_start_time if clip_end_time > clip_start_time else None
+            words = normalize_words(words, duration)
+            logger.info(f"Whisper transcribed {len(words)} acoustic words for clip.")
+            return words
         except Exception as e:
+            if require_acoustic:
+                raise RuntimeError("Transkripsi audio gagal. Periksa audio klip lalu coba lagi.") from e
             logger.warning(f"Whisper acoustic transcription error: {e}")
+
+    if require_acoustic:
+        raise RuntimeError("Whisper belum tersedia. Periksa instalasi/model Whisper dan FFmpeg pada backend.")
 
     # 2. Secondary fallback: Use fallback_transcript if Whisper model is unavailable
     if fallback_transcript:
-        words = []
-        for line in fallback_transcript:
-            line_text = line.get("text", "").strip()
-            if not line_text:
-                continue
-
-            cleaned_line = clean_caption_text(line_text)
-            if not cleaned_line:
-                continue
-
-            l_start = float(line.get("start", 0.0))
-            if "end" in line and float(line.get("end", 0.0)) > l_start:
-                l_end = float(line.get("end", 0.0))
-            elif "duration" in line and float(line.get("duration", 0.0)) > 0:
-                l_end = l_start + float(line.get("duration", 0.0))
-            else:
-                words_cnt = max(1, len(cleaned_line.split()))
-                l_end = l_start + max(1.8, words_cnt * 0.38)
-
-            if clip_end_time > clip_start_time:
-                if l_end < clip_start_time - 0.2 or l_start > clip_end_time + 0.2:
-                    continue
-                rel_start = max(0.0, l_start - clip_start_time)
-                rel_end = max(rel_start + 0.15, l_end - clip_start_time)
-            else:
-                rel_start = max(0.0, l_start)
-                rel_end = max(rel_start + 0.15, l_end)
-
-            line_words = cleaned_line.split()
-            if not line_words:
-                continue
-            w_duration = max(0.12, (rel_end - rel_start) / len(line_words))
-            for i, w in enumerate(line_words):
-                w_s = rel_start + (i * w_duration)
-                w_e = w_s + w_duration
-                words.append({
-                    "word": w,
-                    "start": round(w_s, 2),
-                    "end": round(w_e, 2)
-                })
+        words = transcript_words(fallback_transcript, clip_start_time, clip_end_time)
         if words:
-            logger.info(f"Fallback: using transcript words for clip range [{clip_start_time:.1f}s -> {clip_end_time:.1f}s].")
+            logger.warning("Using transcript fallback for captions; line-only timing is approximate.")
             return words
 
     return []
@@ -1295,12 +1260,10 @@ def transcribe_clip_words(
 
 def format_ass_timestamp(seconds: float) -> str:
     """Format seconds into ASS timestamp format: H:MM:SS.cs"""
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = int(seconds % 60)
-    cs = int(round((seconds - int(seconds)) * 100))
-    if cs >= 100:
-        cs = 99
+    total_cs = max(0, int(seconds * 100 + 0.5))
+    h, remainder = divmod(total_cs, 360000)
+    m, remainder = divmod(remainder, 6000)
+    s, cs = divmod(remainder, 100)
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
@@ -1978,6 +1941,13 @@ def generate_ass_file(
         outline_w = 3.6
         shadow_w = 1.8
 
+    if style_preset == "plain":
+        primary_color = "&H00FFFFFF"
+        outline_color = "&H00000000"
+        back_color = "&H00000000"
+        outline_w = 2.2
+        shadow_w = 0.0
+
     # Title styling: clean transparent background across ALL formats (no black box border)
     title_box_back = "&H00000000"
     title_border_style = 1
@@ -1993,7 +1963,7 @@ Collisions: Reverse
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: TitleStyle,{title_font_name or font_name},{title_font_size},&H00FFFFFF,&H000000FF,&H00000000,{title_box_back},-1,0,0,0,100,100,0,0,{title_border_style},4.4,2.0,8,40,40,0,1
-Style: SubStyle,{font_name},{sub_font_size},{primary_color},&H000000FF,{outline_color},{back_color},-1,0,0,0,100,100,0,0,1,{outline_w},{shadow_w},2,40,40,0,1
+Style: SubStyle,{font_name},{sub_font_size},{primary_color},&H000000FF,{outline_color},{back_color},{0 if style_preset == "plain" else -1},0,0,0,100,100,0,0,1,{outline_w},{shadow_w},2,40,40,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -2019,8 +1989,57 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 f"Dialogue: 1,0:00:00.00,{end_time_str},TitleStyle,,0,0,0,,{{\\q2\\an8\\pos({center_x},{line_y})}}{t_line}"
             )
 
+    words = normalize_words(words, duration_seconds)
+
     # 4. Add Subtitle Events if captions are enabled (guaranteed ZERO vertical glitch / jumping)
-    if words and style_preset != "none":
+    if words and style_preset == "plain":
+        # Caption integrity: preserve source tokens, but split into safe 2-line
+        # events before writing ASS. ASS WrapStyle=2 disables automatic wrapping.
+        normalized = []
+        for w in words:
+            raw = str(w.get("word", "")).strip()
+            if not raw:
+                continue
+            st = max(0.0, float(w["start"]))
+            et = float(w["end"])
+            if not et > st:
+                raise ValueError("Plain subtitle word must have positive duration")
+            normalized.append({"text": raw, "start": st, "end": et})
+        normalized.sort(key=lambda w: w["start"])
+
+        # Conservative character estimate for 88% of video width. Individual
+        # glyph widths vary; explicit 2-line breaks plus ASS margins guard edges.
+        per_line = max(9, int((canvas_w * 0.84) / (sub_font_size * 0.60)))
+        groups = []
+        group = []
+        for w in normalized:
+            prev = group[-1] if group else None
+            next_text = " ".join(x["text"] for x in group + [w])
+            if prev and (w["start"] - prev["end"] > 0.45 or
+                         re.search(r"[.!?]$", prev["text"]) or
+                         len(next_text) > per_line * 2):
+                groups.append(group)
+                group = []
+            group.append(w)
+        if group:
+            groups.append(group)
+
+        for group in groups:
+            lines = [""]
+            for w in group:
+                candidate = (lines[-1] + " " + w["text"]).strip()
+                if lines[-1] and len(candidate) > per_line and len(lines) == 1:
+                    lines.append(w["text"])
+                else:
+                    lines[-1] = candidate
+            # ASS manually breaks lines with \N because WrapStyle=2.
+            caption_text = r"\N".join(escape_ass_text(line) for line in lines)
+            events.append(
+                f"Dialogue: 0,{format_ass_timestamp(group[0]['start'])},{format_ass_timestamp(group[-1]['end'])},SubStyle,,0,0,0,,{{\\q2\\an{sub_align}\\pos({center_x},{sub_y})}}{caption_text}"
+            )
+        logger.info("Plain subtitle integrity: %d words -> %d ASS events, max 2 lines", len(normalized), len(groups))
+
+    if words and style_preset not in ("none", "plain"):
         # Step A: Sanitize and sort all word timestamps
         valid_words = []
         for w in words:
@@ -2029,76 +2048,20 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 continue
             w_text = escape_ass_text(apply_text_case(raw_text, text_case))
             st = max(0.0, float(w.get("start", 0.0)))
-            et = max(st + 0.15, float(w.get("end", st + 0.25)))
-            valid_words.append({"word_text": w_text, "start": st, "end": et, "raw": w})
+            et = float(w["end"])
+            valid_words.append({"word": raw_text, "word_text": w_text, "start": st, "end": et})
 
         valid_words.sort(key=lambda x: x["start"])
+        if len(valid_words) != len([w for w in words if str(w.get("word", "")).strip()]):
+            logger.warning("Subtitle coverage: some non-empty input words could not be prepared for ASS output")
+        else:
+            logger.info("Subtitle coverage: %d/%d non-empty input words prepared for ASS output", len(valid_words), len(valid_words))
 
-        # Step B: Pack into compact chunks (1 to 3 words, max 22 chars) to strictly guarantee 1 single line
-        # Split on natural speech pauses (>= 0.38s) or sentence-ending punctuation so words don't hang over silences
-        chunks = []
-        current_chunk = []
-        current_chars = 0
-        for item in valid_words:
-            w_len = len(item["word_text"])
-            has_pause = bool(current_chunk and (item["start"] - current_chunk[-1]["end"] >= 0.38))
-            ends_sentence = bool(current_chunk and any(current_chunk[-1]["word_text"].endswith(p) for p in [".", "?", "!"]))
-            if len(current_chunk) >= 3 or has_pause or ends_sentence or (current_chunk and (current_chars + w_len > 22)):
-                chunks.append(current_chunk)
-                current_chunk = [item]
-                current_chars = w_len
-            else:
-                current_chunk.append(item)
-                current_chars += w_len + 1
-        if current_chunk:
-            chunks.append(current_chunk)
-
-        # Step C: Enforce strictly non-overlapping, monotonically increasing chunk boundaries
-        chunk_bounds = []
+        # Group visually, but preserve every acoustic word boundary. Padding a
+        # fast word or shifting the next chunk creates accumulating subtitle lag.
+        chunks = caption_chunks(valid_words)
         for chunk in chunks:
-            c_start = chunk[0]["start"]
-            c_end = max(c_start + 0.35, chunk[-1]["end"] + 0.12)
-            if chunk_bounds:
-                prev_end = chunk_bounds[-1][1]
-                if c_start < prev_end:
-                    c_start = prev_end
-                if c_end <= c_start:
-                    c_end = c_start + 0.28
-            chunk_bounds.append((c_start, c_end))
-
-        # Clamp against subsequent chunk start times to eliminate any inter-chunk overlaps
-        for i in range(len(chunk_bounds) - 1):
-            cur_s, cur_e = chunk_bounds[i]
-            nxt_s, nxt_e = chunk_bounds[i + 1]
-            if cur_e > nxt_s:
-                split_pt = max(cur_s + 0.28, nxt_s)
-                chunk_bounds[i] = (cur_s, split_pt)
-                if nxt_s < split_pt:
-                    chunk_bounds[i + 1] = (split_pt, max(split_pt + 0.28, nxt_e))
-
-        # Step D: Partition each chunk into strictly contiguous active-word time slices
-        for chunk_idx, chunk in enumerate(chunks):
-            c_start, c_end = chunk_bounds[chunk_idx]
-            if c_end <= c_start:
-                c_end = c_start + 0.25
-            num_words = len(chunk)
-
-            if num_words == 1:
-                time_slices = [(c_start, c_end)]
-            else:
-                points = [c_start]
-                for w_i in range(1, num_words):
-                    raw_st = chunk[w_i]["start"]
-                    # Enforce minimum 0.16s per word to eliminate micro-flickering while preserving acoustic sync
-                    min_allowed = points[-1] + 0.16
-                    max_allowed = c_end - 0.16 * (num_words - w_i)
-                    if min_allowed > max_allowed:
-                        pt = points[-1] + (c_end - points[-1]) / (num_words - w_i + 1)
-                    else:
-                        pt = max(min_allowed, min(max_allowed, raw_st))
-                    points.append(pt)
-                points.append(c_end)
-                time_slices = [(points[k], points[k + 1]) for k in range(num_words)]
+            time_slices = [(w["start"], w["end"]) for w in chunk]
 
             for active_idx, (w_start, w_end) in enumerate(time_slices):
                 if w_end <= w_start:
@@ -2596,7 +2559,8 @@ def build_ffmpeg_filtergraph(
     title_position: str = "auto",
     ass_subtitles_path: Optional[str] = None,
     face_box: Optional[Dict[str, Any]] = None,
-    title_y_percent: Optional[float] = None
+    title_y_percent: Optional[float] = None,
+    force_square_pixels: bool = False
 ) -> Tuple[str, str]:
     """
     Constructs the FFmpeg -filter_complex chain with proper aspect ratio center-cropping.
@@ -2901,6 +2865,9 @@ def build_ffmpeg_filtergraph(
         filters.append(title_filter)
         current_v = "[v_with_title]"
 
+    if force_square_pixels:
+        filters.append(f"{current_v}setsar=1[v_square_pixels]")
+        current_v = "[v_square_pixels]"
     full_filter_str = ";".join(filters)
     return full_filter_str, current_v
 
@@ -2954,11 +2921,13 @@ def render_clip_to_mp4(
     hook_sfx_enabled: bool = False,
     hook_sfx_path: Optional[str] = None,
     hook_sfx_volume: float = 1.0,
+    timeline_sfx: Optional[List[Dict[str, Any]]] = None,
     # Raw voice / original audio boost (0.0 to 2.0)
     original_audio_volume: float = 1.0,
     # Hardware acceleration selection ('auto', 'nvenc', 'amf', 'qsv', 'cpu')
     hardware_accel: Optional[str] = "auto",
-    title_y_percent: Optional[float] = None
+    title_y_percent: Optional[float] = None,
+    force_square_pixels: bool = False
 ) -> str:
     """
     Renders the final 1080x1920 short-form video with layout, aspect ratio, titles, subtitles,
@@ -3001,7 +2970,8 @@ def render_clip_to_mp4(
         title_position=title_position,
         ass_subtitles_path=ass_subtitles_path,
         face_box=face_box,
-        title_y_percent=title_y_percent
+        title_y_percent=title_y_percent,
+        force_square_pixels=force_square_pixels
     )
 
     filter_chains = [filter_complex]
@@ -3139,6 +3109,37 @@ def render_clip_to_mp4(
             f"[{sfx_idx}:a]asetpts=PTS-STARTPTS,atrim=end={dur:.2f},volume={sfx_vol:.3f}[sfx_proc]"
         )
         audio_inputs_to_mix.append("[sfx_proc]")
+
+    # Multi-SFX: individual timeline positions measured from beginning of rendered clip.
+    # Uploaded audio paths are validated against the application's upload folder.
+    allowed_root = (BASE_DIR / "temp_clips").resolve()
+    for n, item in enumerate((timeline_sfx or [])[:16]):
+        try:
+            path = Path(str(item.get("filePath") or "")).resolve()
+            if not path.is_file() or not path.is_relative_to(allowed_root):
+                logger.warning("Skipping untrusted or missing timeline SFX path: %s", path)
+                continue
+            when = float(item.get("time", 0))
+            vol_pct = float(item.get("volume", 70))
+            if not math.isfinite(when) or not math.isfinite(vol_pct):
+                continue
+            when = max(0.0, min(dur - 0.01, when))
+            volume = max(0.0, min(1.5, vol_pct / 100.0))
+            if volume == 0:
+                continue
+            idx = input_idx_counter
+            input_idx_counter += 1
+            extra_input_args.extend(["-i", str(path)])
+            delay_ms = int(round(when * 1000))
+            remain = max(0.01, dur - when)
+            label = f"timeline_sfx_{n}"
+            filter_chains.append(
+                f"[{idx}:a]asetpts=PTS-STARTPTS,atrim=duration={remain:.3f},"
+                f"volume={volume:.3f},adelay={delay_ms}:all=1[{label}]"
+            )
+            audio_inputs_to_mix.append(f"[{label}]")
+        except (TypeError, ValueError, OSError) as exc:
+            logger.warning("Skipping invalid timeline SFX: %s", exc)
 
     # Mix audio streams together
     if len(audio_inputs_to_mix) > 1:

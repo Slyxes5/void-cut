@@ -1,5 +1,5 @@
 /**
- * Resilient API client for Cheat Clip Pro.
+ * Resilient API client for Void Cut.
  * Handles automatic retry when backend server is starting up or reloading (503 / network refused).
  */
 

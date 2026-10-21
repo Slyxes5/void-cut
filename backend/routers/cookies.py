@@ -63,13 +63,7 @@ async def validate_youtube_cookies(request: Request):
 
 @router.get("/api/cookies")
 def get_youtube_cookies_status():
-    # Server is strictly stateless; cookies are stored only in client's LocalStorage
-    for p in [COOKIES_PATH, ROOT_COOKIES_PATH]:
-        if p.exists():
-            try:
-                p.unlink()
-            except Exception:
-                pass
+    # Read-only status. Legacy cookie deletion belongs to the CSRF-protected DELETE/POST routes.
 
     return {
         "exists": False,

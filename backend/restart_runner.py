@@ -1,5 +1,5 @@
 """
-Detached background restart runner for Cheat Clip PRO.
+Detached background restart runner for Void Cut.
 Spawns as an independent detached process, waits for HTTP response delivery,
 frees ports 8000 and 5173, and relaunches `npm run dev` in a fresh console.
 """
@@ -83,7 +83,7 @@ def free_ports_unix(ports=(8000, 5173)):
             pass
 
 def main():
-    parser = argparse.ArgumentParser(description="Cheat Clip PRO Background Restart Runner")
+    parser = argparse.ArgumentParser(description="Void Cut Background Restart Runner")
     parser.add_argument("--delay", type=float, default=2.5, help="Seconds to wait before freeing ports")
     parser.add_argument("--cwd", type=str, default="", help="Workspace root directory")
     args = parser.parse_args()

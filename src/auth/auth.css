@@ -1,0 +1,26 @@
+.auth-screen { min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; background: #080d17; color: #e5eaf2; }
+.auth-card { width: 100%; max-width: 420px; padding: 28px; background: #111b2a; border: 1px solid #304058; border-radius: 18px; overflow-wrap: anywhere; }
+.auth-brand { font-size: 12px; letter-spacing: .14em; color: #93c5fd; font-weight: 700; }
+.auth-card h1 { font-size: 28px; margin: 12px 0; }
+.auth-card p { line-height: 1.6; color: #b7c5d8; margin: 14px 0; }
+.auth-card form { display: grid; gap: 12px; margin: 24px 0 16px; }
+.auth-card input { width: 100%; min-height: 48px; border: 1px solid #526581; border-radius: 8px; padding: 10px 12px; font-size: 16px; background: #080d17; color: #fff; }
+.auth-card button, .auth-toolbar button { min-height: 44px; padding: 10px 16px; border-radius: 8px; border: 1px solid #527ab3; background: #1d4f96; color: #fff; cursor: pointer; font-size: 16px; }
+.auth-card button:disabled, .auth-toolbar button:disabled { opacity: .6; cursor: wait; }
+.auth-card input:focus-visible, .auth-card button:focus-visible, .auth-toolbar button:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
+.auth-card .auth-recheck { background: transparent; }
+.auth-notice { padding: 12px; border: 1px solid #526581; border-radius: 8px; line-height: 1.6; }
+.auth-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 8px 16px; background: #111b2a; color: #b7c5d8; font-size: 13px; }
+.auth-editor[hidden] { display: none !important; }
+
+/* Match the Void Cut workspace while preserving the authentication layout. */
+.auth-screen { background: #f5f1e9; color: #302b27; }
+.auth-card { background: #fffdf9; border-color: #ded7cb; }
+.auth-brand { color: #9c4d30; }
+.auth-card p { color: #6a6158; }
+.auth-card input { background: #fffcf7; color: #302b27; border-color: #cdbda8; }
+.auth-card button, .auth-toolbar button { background: #a34c2c; border-color: #a34c2c; }
+.auth-card .auth-recheck { color: #85452d; }
+.auth-notice { border-color: #d8c8b1; }
+.auth-toolbar { background: #eae3d7; color: #6a6158; }
+.auth-toolbar button { min-height: 32px; padding: 5px 12px; font-size: 12px; }

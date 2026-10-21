@@ -51,7 +51,9 @@ ROOT_DIR = Path(_base_dir).parent
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("cheat-clip-pro")
+from backend.security import install_log_redaction
+install_log_redaction()
+logger = logging.getLogger("void-cut")
 
 
 try:

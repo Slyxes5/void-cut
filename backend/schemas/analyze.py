@@ -47,11 +47,17 @@ class HeatmapPoint(BaseModel):
     end_time: float
     value: float
 
+class TranscriptWord(BaseModel):
+    word: str
+    start: float
+    end: float
+
 class TranscriptLine(BaseModel):
     start: float
     end: float
     text: str
     engagement: Optional[float] = None
+    words: Optional[List[TranscriptWord]] = None
 
 class AnalyzeResponse(BaseModel):
     video_id: str

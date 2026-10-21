@@ -198,7 +198,7 @@ function installDependencies(candidate) {
 }
 
 async function start() {
-  console.log('\x1b[36m%s\x1b[0m', '⚡ [Cheat Clip Pro] Initializing Fast & Resilient Python Backend Server...');
+  console.log('\x1b[36m%s\x1b[0m', '⚡ [Void Cut] Initializing Fast & Resilient Python Backend Server...');
 
   const candidates = findPythonCandidates();
   let selectedCandidate = null;

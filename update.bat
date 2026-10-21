@@ -1,12 +1,12 @@
 @echo off
 setlocal enabledelayedexpansion
-title Cheat Clip PRO Updater
+title Void Cut Updater
 
 :: Change directory safely to current folder (handling spaces in path)
 cd /d "%~dp0"
 
 echo ===================================================
-echo   Updating Cheat Clip PRO to Latest Version
+echo   Updating Void Cut to Latest Version
 echo ===================================================
 
 :: Setup PATH

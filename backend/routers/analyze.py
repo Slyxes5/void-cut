@@ -6,6 +6,8 @@ import re
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from backend.security import remember_secret
 from fastapi.responses import StreamingResponse
 from google import genai
 from google.genai import types
@@ -197,7 +199,7 @@ def health_check(refresh: bool = False):
     }
     return {
         "status": "ok",
-        "message": "CHEAT CLIP PRO API is active",
+        "message": "VOID CUT API is active",
         "is_vercel": is_vercel,
         "is_server": is_server_environment(),
         "allow_app_updates": is_update_allowed(),
@@ -214,11 +216,20 @@ def supadata_usage_endpoint(refresh: bool = False):
     return get_supadata_usage_data(force=refresh)
 
 
+class ModelListRequest(BaseModel):
+    api_key: str = ""
+
+
 @router.get("/api/models")
-def list_available_models(api_key: str = ""):
-    """Fetches list of available Gemini models using the user's API key, prioritizing Flash models (newest first)."""
-    models = list_available_gemini_models(api_key)
-    return {"models": models}
+def list_available_models():
+    """Server-default discovery only. Custom keys are accepted only in a POST body."""
+    return {"models": list_available_gemini_models("")}
+
+
+@router.post("/api/models")
+def list_available_models_with_key(request: ModelListRequest):
+    remember_secret(request.api_key)
+    return {"models": list_available_gemini_models(request.api_key)}
 
 
 @router.post("/api/analyze")
@@ -227,6 +238,7 @@ async def analyze_video(request: AnalyzeRequest):
 
     async def stream():
         gemini_key = (request.api_key or os.environ.get("GEMINI_API_KEY") or '').strip()
+        remember_secret(gemini_key)
         is_mock = gemini_key.lower() == "mock"
 
         if not gemini_key:
@@ -387,7 +399,7 @@ async def analyze_video(request: AnalyzeRequest):
                     check_man = validate_transcript_language(transcript_lines, title=title)
                     if not check_man['is_supported']:
                         yield _sse({
-                            "error": f"Bahasa subtitle tidak didukung: terdeteksi {check_man['name']}. Cheat Clip Pro hanya memproses bahasa Indonesia dan Inggris.",
+                            "error": f"Bahasa subtitle tidak didukung: terdeteksi {check_man['name']}. Void Cut hanya memproses bahasa Indonesia dan Inggris.",
                             "status": 400
                         })
                         return
@@ -460,7 +472,7 @@ async def analyze_video(request: AnalyzeRequest):
                         yield _sse({
                             "error": (
                                 f"Video ini terdeteksi menggunakan percakapan dalam bahasa {check_up['name']}. "
-                                "Cheat Clip Pro difokuskan khusus untuk video dalam Bahasa Indonesia dan Bahasa Inggris saja."
+                                "Void Cut difokuskan khusus untuk video dalam Bahasa Indonesia dan Bahasa Inggris saja."
                             ),
                             "status": 400
                         })
@@ -532,7 +544,7 @@ async def analyze_video(request: AnalyzeRequest):
             except Exception as e:
                 if is_mock:
                     title = "Mock YouTube Video"
-                    channel = "Cheat Clip Pro"
+                    channel = "Void Cut"
                     duration = 212.0
                     heatmap = []
                     is_live = False
@@ -597,7 +609,7 @@ async def analyze_video(request: AnalyzeRequest):
                     check_man = validate_transcript_language(transcript_lines, expected_video_lang=expected_video_lang, title=title)
                     if not check_man['is_supported']:
                         yield _sse({
-                            "error": f"Bahasa subtitle tidak didukung: terdeteksi {check_man['name']}. Cheat Clip Pro hanya memproses bahasa Indonesia dan Inggris.",
+                            "error": f"Bahasa subtitle tidak didukung: terdeteksi {check_man['name']}. Void Cut hanya memproses bahasa Indonesia dan Inggris.",
                             "status": 400
                         })
                         return
@@ -792,7 +804,7 @@ async def analyze_video(request: AnalyzeRequest):
                                     yield _sse({
                                         "error": (
                                             f"Audio video ini terdeteksi menggunakan percakapan dalam bahasa {w_check['name']}. "
-                                            "Cheat Clip Pro difokuskan khusus untuk video dalam Bahasa Indonesia dan Bahasa Inggris saja."
+                                            "Void Cut difokuskan khusus untuk video dalam Bahasa Indonesia dan Bahasa Inggris saja."
                                         ),
                                         "status": 400
                                     })
@@ -878,7 +890,8 @@ async def analyze_video(request: AnalyzeRequest):
                 "start":      round(ls, 2),
                 "end":        round(le, 2),
                 "text":       line.get("text", ""),
-                "engagement": round(score, 3)
+                "engagement": round(score, 3),
+                "words": line.get("words"),
             })
 
         # ── Mock short-circuit ───────────────────────────────────────────────
@@ -916,9 +929,9 @@ async def analyze_video(request: AnalyzeRequest):
                 ViralClip(title="Introductory overview of the tool", start_time=0.0,  end_time=11.0, hook_time=3.0, virality_score=72,
                           key_quotes=["Hello and welcome.", "Finds viral hotspots."],
                           transcript="Hello and welcome. It finds viral hotspots and highlights them.",
-                          title_suggestion="Meet Cheat Clip Pro AI",
+                          title_suggestion="Meet Void Cut AI",
                           caption_suggestion="Say hello to your new AI co-editor. Find the absolute best parts of any video instantly.",
-                          hashtag_suggestion="#cheatclippro #aiediting #growthmindset"),
+                          hashtag_suggestion="#voidcut #aiediting #growthmindset"),
             ]
             mock_heatmap = [
                 HeatmapPoint(start_time=i*10.0, end_time=(i+1)*10.0,
@@ -933,7 +946,7 @@ async def analyze_video(request: AnalyzeRequest):
             result = AnalyzeResponse(
                 video_id=video_id, title=title, channel=channel, duration=duration or 200.0,
                 heatmap=mock_heatmap,
-                summary="Mock analysis: this video explains how CHEAT CLIP PRO works. #aitools #videoediting #productivity",
+                summary="Mock analysis: this video explains how VOID CUT works. #aitools #videoediting #productivity",
                 clips=mock_clips,
                 model="Mock Gemini"
             )
@@ -1005,7 +1018,7 @@ async def analyze_video(request: AnalyzeRequest):
             yield _sse({
                 "error": (
                     f"Transkrip video terdeteksi dalam bahasa {detected_lang.get('name')}. "
-                    "Cheat Clip Pro difokuskan khusus untuk video dalam Bahasa Indonesia dan Bahasa Inggris saja."
+                    "Void Cut difokuskan khusus untuk video dalam Bahasa Indonesia dan Bahasa Inggris saja."
                 ),
                 "status": 400
             })
@@ -1014,7 +1027,7 @@ async def analyze_video(request: AnalyzeRequest):
         lang_code = detected_lang.get('code', 'en')
         if lang_code not in ('id', 'en'):
             yield _sse({
-                "error": f"Bahasa transkrip ({lang_code}) tidak valid. Cheat Clip Pro hanya memproses bahasa Indonesia dan Inggris.",
+                "error": f"Bahasa transkrip ({lang_code}) tidak valid. Void Cut hanya memproses bahasa Indonesia dan Inggris.",
                 "status": 400
             })
             return
@@ -1149,12 +1162,12 @@ async def analyze_video(request: AnalyzeRequest):
 
         for idx, model_name in enumerate(models_to_try):
             next_model_hint = models_to_try[idx + 1] if idx + 1 < len(models_to_try) else None
-            MAX_RETRIES = 1
+            MAX_RETRIES = 2
             MODEL_TIMEOUT_SEC = 120.0  # 120s best-practice timeout for comprehensive video analysis
             
             for attempt in range(MAX_RETRIES):
                 if attempt > 0:
-                    wait = 2
+                    wait = min(20, 5 * (2 ** (attempt - 1)))
                     yield _sse({
                         "step": 4,
                         "step_progress": 25,
@@ -1502,7 +1515,8 @@ async def analyze_video(request: AnalyzeRequest):
                 start=float(line["start"]),
                 end=float(line["end"]),
                 text=line["text"],
-                engagement=line.get("engagement")
+                engagement=line.get("engagement"),
+                words=line.get("words"),
             )
             for line in enriched_transcript
         ]

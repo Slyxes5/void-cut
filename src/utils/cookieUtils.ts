@@ -95,7 +95,7 @@ export function normalizeCookies(rawContent: string): string {
         const lines: string[] = [
           '# Netscape HTTP Cookie File',
           '# http://curl.haxx.se/rfc/cookie_spec.html',
-          '# Converted automatically from JSON format by CheatClip Pro',
+          '# Converted automatically from JSON format by Void Cut',
           '',
         ];
         let count = 0;
@@ -140,7 +140,7 @@ export function normalizeCookies(rawContent: string): string {
     const headerLines: string[] = [
       '# Netscape HTTP Cookie File',
       '# http://curl.haxx.se/rfc/cookie_spec.html',
-      '# Converted automatically from HTTP Cookie header by CheatClip Pro',
+      '# Converted automatically from HTTP Cookie header by Void Cut',
       '',
     ];
     let cookieCount = 0;

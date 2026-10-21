@@ -1,25 +1,20 @@
 import asyncio
+import hashlib
 import json
-import logging
-import os
 import re
 import time
 import uuid
-import zipfile
-from typing import Dict, List, Optional
+from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from backend.config import (
     ACTIVE_ENCODER_NAME,
-    EXPORTS_DIR,
     detect_hardware_support,
-    logger,
 )
 from backend.schemas.render import (
     RenderBatchRequest,
-    RenderSettingsModel,
     RetryBatchRequest,
 )
 from backend.services.render_service import (
@@ -29,13 +24,65 @@ from backend.services.render_service import (
     process_batch_retry,
 )
 
+from backend.services.render_status import OUTPUT_NAME, RAW_DOWNLOAD_NAME, batch_snapshot, recent_batches, safe_export, finalized_zip
+
 router = APIRouter(tags=["Render"])
+# Only request digests and original response metadata, never a second copy of request secrets.
+# Creation is await-free on the event loop: check + register + schedule are atomic per process.
+REQUEST_IDS = {}
+
+
+@router.get("/api/render-request/{request_id}")
+async def get_render_request(request_id: str):
+    accepted = REQUEST_IDS.get(request_id)
+    snapshot = batch_snapshot(accepted['response']['batch_id']) if accepted else None
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Render request not found", headers={"Cache-Control": "no-store"})
+    return JSONResponse(snapshot, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/api/render-batches")
+async def get_render_batches():
+    return JSONResponse({"batches": recent_batches()}, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/api/render-status/{batch_id}")
+async def get_render_status(batch_id: str):
+    snapshot = batch_snapshot(batch_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Batch not found", headers={"Cache-Control": "no-store"})
+    return JSONResponse(snapshot, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/api/render-batch")
-async def start_batch_render(request: RenderBatchRequest, background_tasks: BackgroundTasks):
+async def start_batch_render(
+    request: RenderBatchRequest,
+    background_tasks: BackgroundTasks,
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+):
     if not request.clips:
         raise HTTPException(status_code=400, detail="No clips provided for rendering")
+
+    digest = None
+    if idempotency_key is not None:
+        if not re.fullmatch(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', idempotency_key):
+            raise HTTPException(status_code=422, detail="Idempotency-Key must be a UUID")
+        normalized = json.dumps(request.model_dump(mode='json'), sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+        digest = hashlib.sha256(normalized.encode('utf-8')).hexdigest()
+        accepted = REQUEST_IDS.get(idempotency_key)
+        if accepted:
+            if accepted['digest'] != digest:
+                raise HTTPException(status_code=409, detail="Idempotency-Key already used for a different request")
+            return {**accepted['response'], 'reused': True}
+        # Two open tabs may generate different keys for the same active request.
+        # Reuse that exact request only while it is queued/running; a deliberately
+        # new batch after completion remains supported with a fresh key.
+        active = next((entry for entry in REQUEST_IDS.values()
+                       if entry['digest'] == digest
+                       and RENDER_BATCHES.get(entry['response']['batch_id'], {}).get('overall_status') == 'running'), None)
+        if active:
+            REQUEST_IDS[idempotency_key] = active
+            return {**active['response'], 'reused': True}
 
     batch_id = f"batch_{int(time.time())}_{uuid.uuid4().hex[:6]}"
 
@@ -92,9 +139,13 @@ async def start_batch_render(request: RenderBatchRequest, background_tasks: Back
         }
 
     BATCH_REQUESTS[batch_id] = request
+    RENDER_BATCHES[batch_id]['request_id'] = idempotency_key
+    response = {"batch_id": batch_id, "total_clips": 1 if is_merged else len(request.clips), "is_merged": is_merged}
+    if idempotency_key is not None:
+        REQUEST_IDS[idempotency_key] = {'digest': digest, 'response': response}
 
     background_tasks.add_task(process_batch_rendering, batch_id, request)
-    return {"batch_id": batch_id, "total_clips": 1 if is_merged else len(request.clips), "is_merged": is_merged}
+    return response
 
 
 @router.post("/api/render-batch/{batch_id}/retry")
@@ -106,26 +157,26 @@ async def retry_batch_rendering(
     if batch_id not in RENDER_BATCHES:
         raise HTTPException(status_code=404, detail="Batch not found")
     batch = RENDER_BATCHES[batch_id]
+    if batch.get("overall_status") == "running":
+        raise HTTPException(status_code=409, detail="Batch is running or queued. Please wait for it to finish.")
     if batch_id not in BATCH_REQUESTS:
         raise HTTPException(status_code=400, detail="Batch configuration expired. Please start a new render.")
 
-    if batch.get("overall_status") == "running":
-        # Check if any clip is actively running
-        running = any(c.get("status") in ["downloading", "transcribing", "rendering"] for c in batch.get("clips", []))
-        if running:
-            raise HTTPException(status_code=400, detail="Batch is currently rendering. Please wait for the current clip to finish.")
-
     req = BATCH_REQUESTS[batch_id]
-    if body and body.cookies:
-        req.cookies = body.cookies
     indices_to_retry: List[int] = []
-    if body and body.clip_indices:
-        indices_to_retry = [i for i in body.clip_indices if 0 <= i < len(batch["clips"])]
+    if body and body.clip_indices is not None:
+        indices_to_retry = sorted(set(body.clip_indices))
+        if any(i < 0 or i >= len(batch['clips']) or batch['clips'][i].get('status') != 'error'
+               for i in indices_to_retry):
+            raise HTTPException(status_code=400, detail="Only failed clips can be retried.")
     else:
         indices_to_retry = [i for i, c in enumerate(batch["clips"]) if c.get("status") == "error"]
 
     if not indices_to_retry:
         raise HTTPException(status_code=400, detail="No failed clips to retry in this batch.")
+
+    if body and body.cookies:
+        req.cookies = body.cookies
 
     for idx in indices_to_retry:
         batch["clips"][idx]["status"] = "pending"
@@ -147,14 +198,14 @@ async def retry_batch_rendering(
 
 @router.get("/api/render-progress/{batch_id}")
 async def get_render_progress(batch_id: str):
-    if batch_id not in RENDER_BATCHES:
-        raise HTTPException(status_code=404, detail="Batch not found")
+    if batch_snapshot(batch_id) is None:
+        raise HTTPException(status_code=404, detail="Batch not found", headers={"Cache-Control": "no-store"})
 
     async def stream():
         last_sent_json = None
         idle_count = 0
         while True:
-            batch = RENDER_BATCHES.get(batch_id)
+            batch = batch_snapshot(batch_id)
             if not batch:
                 break
             batch_json = json.dumps(batch)
@@ -177,7 +228,7 @@ async def get_render_progress(batch_id: str):
         stream(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-store",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         }
@@ -186,9 +237,9 @@ async def get_render_progress(batch_id: str):
 
 @router.get("/api/download-rendered/{file_name}")
 def download_rendered_file(file_name: str, title: Optional[str] = None):
-    safe_name = os.path.basename(file_name)
-    file_path = EXPORTS_DIR / safe_name
-    if not file_path.exists():
+    safe_name = file_name
+    file_path = safe_export(safe_name) if (OUTPUT_NAME.fullmatch(safe_name) or RAW_DOWNLOAD_NAME.fullmatch(safe_name)) else None
+    if file_path is None:
         raise HTTPException(status_code=404, detail="Rendered clip not found")
 
     # If title provided, sanitize and use as download filename
@@ -203,33 +254,12 @@ def download_rendered_file(file_name: str, title: Optional[str] = None):
 
 @router.get("/api/download-batch-zip/{batch_id}")
 def download_batch_zip(batch_id: str):
-    clean_id = os.path.basename(batch_id)
-    safe_name = f"cheat_clip_pro_{clean_id}.zip"
-    file_path = EXPORTS_DIR / safe_name
-    if not file_path.exists():
-        # Attempt to package any completed clips for this batch on the fly
-        job = RENDER_BATCHES.get(batch_id)
-        if job and job.get("clips"):
-            try:
-                title_counts: Dict[str, int] = {}
-                with zipfile.ZipFile(file_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-                    for c in job["clips"]:
-                        c_out = c.get("output_path")
-                        if not c_out and c.get("download_url"):
-                            fname = c["download_url"].split("/")[-1]
-                            c_out = str(EXPORTS_DIR / fname)
-                        if c_out and os.path.exists(c_out):
-                            raw_title = (c.get("title") or "").strip()
-                            clean_title = re.sub(r'[\\/*?:"<>|]', "", raw_title) or os.path.splitext(os.path.basename(c_out))[0]
-                            count = title_counts.get(clean_title, 0)
-                            title_counts[clean_title] = count + 1
-                            arc_name = f"{clean_title}.mp4" if count == 0 else f"{clean_title} ({count}).mp4"
-                            zipf.write(c_out, arcname=arc_name)
-            except Exception as e:
-                logger.error(f"Error packaging batch zip on the fly: {e}")
-    if not file_path.exists():
+    if RENDER_BATCHES.get(batch_id, {}).get('overall_status') == 'running':
+        raise HTTPException(status_code=409, detail="Batch ZIP is not finalized while rendering")
+    file_path = finalized_zip(batch_id)
+    if file_path is None:
         raise HTTPException(status_code=404, detail="Batch zip file not found")
-    return FileResponse(file_path, media_type="application/zip", filename=safe_name)
+    return FileResponse(file_path, media_type="application/zip", filename=file_path.name)
 
 
 @router.get("/api/hardware-accel")

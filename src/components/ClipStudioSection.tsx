@@ -1,4 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import AudioLibraryPicker from './AudioLibraryPicker';
+import { RenderRecoveryNotice } from './RenderRecoveryNotice';
+import type { RecoveryConnection } from '../services/batchRecovery';
+import { buildCaptionFrames } from '../utils/subtitleTiming';
 import { useLanguage } from '../locales';
 import { resilientFetch } from '../utils/api';
 import { getStoredCookies, hasStoredCookies } from '../utils/cookieUtils';
@@ -17,12 +21,17 @@ import type {
   TitleDurationOption,
   SubtitlePositionMode,
   BatchRenderProgress,
+  RenderClipStatus,
   HardwareAccelOption,
   HardwareAccelInfo,
   FontItem,
+  EditedSubtitleWord,
+  TimelineSfx,
 } from '../types';
 
 interface ClipStudioSectionProps {
+  isActive?: boolean;
+  onOpenExports?: () => void;
   videoUrl: string;
   videoId: string;
   allClips: ViralClip[];
@@ -30,6 +39,10 @@ interface ClipStudioSectionProps {
   activeClip: ViralClip | null;
   onStartRender: (settings: RenderSettings) => void;
   isRendering: boolean;
+  recoveryBlocked?: boolean;
+  recoveryConnection?: RecoveryConnection;
+  onCheckRender?: () => void;
+  onOpenSocialAccounts?: () => void;
   onToggleMarkClip?: (clip: ViralClip) => void;
   onToggleAllClips?: (forceSelect?: boolean) => void;
   batchProgress?: BatchRenderProgress | null;
@@ -37,6 +50,13 @@ interface ClipStudioSectionProps {
   onRetryClip?: (clipIndex?: number) => void;
   allowAppUpdates?: boolean;
   onOpenCookiesModal?: () => void;
+  onEditClipDuration?: (clip: ViralClip) => void;
+  onEditTranscript?: (clip: ViralClip) => void;
+  subtitleEdits?: Record<string, EditedSubtitleWord[]>;
+  onSyncSubtitles?: (clip: ViralClip) => void;
+  isSyncingSubtitles?: boolean;
+  subtitleSyncError?: string;
+  onUploadClip?: (batchId: string, clip: RenderClipStatus) => void;
 }
 
 function getFriendlyErrorMessage(rawMsg: string): string {
@@ -255,6 +275,8 @@ function getSavedStudioPreferences(): Partial<StudioPreferences> {
 }
 
 export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
+  isActive = true,
+  onOpenExports,
   videoUrl,
   videoId,
   allClips,
@@ -262,6 +284,10 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   activeClip,
   onStartRender,
   isRendering,
+  recoveryBlocked = false,
+  recoveryConnection = {mode:'idle',message:''},
+  onCheckRender,
+  onOpenSocialAccounts,
   onToggleMarkClip,
   onToggleAllClips,
   batchProgress,
@@ -269,8 +295,18 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   onRetryClip,
   allowAppUpdates = false,
   onOpenCookiesModal,
+  onEditClipDuration,
+  onEditTranscript,
+  subtitleEdits = {},
+  onSyncSubtitles,
+  isSyncingSubtitles = false,
+  subtitleSyncError = '',
+  onUploadClip,
 }) => {
   const { t } = useLanguage();
+  const hasServerResults = !!batchProgress && batchProgress.overall_status !== 'running'
+    && batchProgress.batch_id.startsWith('batch_');
+  const unresolvedRender = recoveryBlocked && batchProgress?.overall_status !== 'running';
   const isYouTube = !videoId?.startsWith('upload_') && !videoId?.startsWith('gdrive_') && !videoUrl?.includes('/api/video');
   const [hasCookies, setHasCookies] = useState<boolean>(() => hasStoredCookies());
 
@@ -370,6 +406,34 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [isUploadingHookSfx, setIsUploadingHookSfx] = useState<boolean>(false);
   const [isHookSfxDragging, setIsHookSfxDragging] = useState<boolean>(false);
   const hookSfxAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Individual sound effects placed on each clip timeline (relative to start).
+  const [timelineSfx, setTimelineSfx] = useState<TimelineSfx[]>([]);
+  const [isUploadingTimelineSfx, setIsUploadingTimelineSfx] = useState(false);
+  const [timelineSfxUrls, setTimelineSfxUrls] = useState<Record<string, string>>({});
+  const addTimelineSfx = async (file: File) => {
+    setIsUploadingTimelineSfx(true);
+    try {
+      const data = new FormData();
+      data.append('file', file);
+      const response = await fetch('/api/upload-sfx', { method: 'POST', body: data });
+      if (!response.ok) throw new Error('Upload SFX failed');
+      const uploaded = await response.json();
+      const path = String(uploaded.file_path);
+      setTimelineSfx(old => [...old, {
+        filePath: path,
+        fileName: String(uploaded.filename || file.name),
+        time: Math.max(0, Math.min(clipDuration - 0.1, currentTime - clipStart || 0)),
+        volume: 70,
+      }]);
+      setTimelineSfxUrls(old => ({ ...old, [path]: String(uploaded.url || '') }));
+    } catch (error) {
+      console.error(error);
+      alert('Failed to upload timeline SFX.');
+    } finally {
+      setIsUploadingTimelineSfx(false);
+    }
+  };
 
   // Watermark state & default configs
   const [watermarkEnabled, setWatermarkEnabled] = useState<boolean>(false);
@@ -488,6 +552,24 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const directVideoRef = useRef<HTMLVideoElement | null>(null);
   const ambientVideoRef = useRef<HTMLVideoElement | null>(null);
   const trackingTimerRef = useRef<number | null>(null);
+  const timelineAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewActiveRef = useRef(isActive);
+  previewActiveRef.current = isActive;
+
+  useEffect(() => {
+    if (isActive) return;
+    try { previewPlayerRef.current?.pauseVideo?.(); } catch { /* Player may not be ready yet. */ }
+    directVideoRef.current?.pause();
+    ambientVideoRef.current?.pause();
+    bgmAudioRef.current?.pause();
+    hookSfxAudioRef.current?.pause();
+    timelineAudioRef.current?.pause();
+    setIsPlaying(false);
+    setIsBgmPlaying(false);
+    setIsHookSfxPlaying(false);
+    stopTracking();
+  }, [isActive]);
+  useEffect(() => () => { timelineAudioRef.current?.pause(); }, []);
 
   // Keep selectedClips in sync if markedClips updates from outside (including 0 clips)
   useEffect(() => {
@@ -518,8 +600,11 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     const fetchFace = async () => {
       try {
         const userCookies = getStoredCookies();
-        const cookiesParam = userCookies ? `&cookies=${encodeURIComponent(userCookies)}` : '';
-        const res = await fetch(`/api/detect-face?video_id=${encodeURIComponent(videoId)}&timestamp=${clipStart}&video_url=${encodeURIComponent(videoUrl || '')}&facecam_position=${encodeURIComponent(facecamPosition)}&streamer_preset=${encodeURIComponent(streamerPreset)}${cookiesParam}`);
+        const res = await fetch('/api/detect-face', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ video_id: videoId, timestamp: clipStart, video_url: videoUrl || '',
+            facecam_position: facecamPosition, streamer_preset: streamerPreset, cookies: userCookies || null }),
+        });
         if (res.ok && isMounted) {
           const data = await res.json();
           if (data && typeof data.cx === 'number') {
@@ -574,6 +659,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
   // Initialize YouTube player or HTML5 direct video
   const initPreviewPlayer = () => {
+    if (!previewActiveRef.current) return;
     if (!videoId && !videoUrl) return;
 
     const isDirect = Boolean(videoUrl && (videoUrl.endsWith('.mp4') || videoUrl.endsWith('.webm') || videoUrl.endsWith('.mov') || videoUrl.endsWith('.mkv') || videoUrl.includes('/api/video') || videoUrl.startsWith('blob:') || videoId?.startsWith('upload_') || videoId?.startsWith('gdrive_')));
@@ -699,7 +785,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           }
         }
       } catch (e) {}
-    }, 150);
+    }, 30);
   };
 
   const stopTracking = () => {
@@ -710,6 +796,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   };
 
   useEffect(() => {
+    if (!isActive) return;
     initPreviewPlayer();
     return () => {
       stopTracking();
@@ -720,7 +807,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
         previewPlayerRef.current = null;
       }
     };
-  }, [videoId, previewClipIndex]);
+  }, [videoId, previewClipIndex, isActive]);
 
   // When previewClipIndex changes, seek player to new clip start
   useEffect(() => {
@@ -1351,6 +1438,22 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
   const currentClipKey = currentPreviewClip ? `${currentPreviewClip.start_time}_${currentPreviewClip.end_time}` : '';
   const currentCustomTitle = currentClipKey ? customClipTitles[currentClipKey] : undefined;
+  // Live captions are driven only by the same applied, per-clip words sent to backend rendering.
+  // We intentionally do not display fabricated example words as actual subtitles.
+  const previewEditedWords = subtitleEdits[currentClipKey];
+  const captionFrames = useMemo(() => {
+    if (!previewEditedWords || !currentPreviewClip || captionStyle === 'none') return [];
+    const canvasW = isLandscape ? 1920 : 1080;
+    const lineLimit = Math.max(9, Math.floor((canvasW * .84) / (fontSizePx * .60)));
+    return buildCaptionFrames(previewEditedWords, currentPreviewClip, captionStyle === 'plain', lineLimit);
+  }, [previewEditedWords, currentPreviewClip, captionStyle, fontSizePx, isLandscape]);
+  const captionTime = currentTime - clipStart;
+  const liveCaption = captionFrames.find(frame => captionTime >= frame.start && captionTime < frame.end);
+  const liveHighlightColor: Record<string,string> = {
+    viral_pop:'#FFE600', beast_punch:'#00FF66', cyber_violet:'#D946EF',
+    fire_red:'#FF2E2E', electric_cyan:'#00F0FF', golden_aura:'#FFB800', clean_minimal:'#ffffff'
+  };
+
 
   const baseClipHookTitle = (
     currentCustomTitle !== undefined && currentCustomTitle.trim() !== ''
@@ -1520,6 +1623,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   };
 
   const handleLaunch = () => {
+    if (isSyncingSubtitles || isRendering || recoveryBlocked) return;
     const enrichedSelectedClips = selectedClips.map(c => {
       const key = `${c.start_time}_${c.end_time}`;
       const custom = customClipTitles[key];
@@ -1571,6 +1675,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       hookSfxFilePath,
       hookSfxFileName,
       hookSfxVolume,
+      timelineSfx,
       // Watermark
       watermarkEnabled,
       watermarkType,
@@ -1644,6 +1749,29 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             <span>{t.studio.resetToDefaults || 'Reset to Defaults'}</span>
           </button>
 
+          {/* Flexible clip duration: accessible directly from Clip Studio */}
+          {currentPreviewClip && onEditClipDuration && (
+            <button
+              type="button"
+              onClick={() => onEditClipDuration(currentPreviewClip)}
+              title="Atur awal dan akhir klip, lalu simpan ke Clip Studio"
+              style={{
+                border: '1px solid rgba(34,197,94,0.5)',
+                borderRadius: '9px',
+                background: 'rgba(34,197,94,0.13)',
+                color: '#86efac',
+                padding: '0.55rem 0.85rem',
+                fontSize: '0.8rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+              }}
+            >
+              ✂️ Edit Duration ({Math.round(currentPreviewClip.end_time - currentPreviewClip.start_time)}s)
+            </button>
+          )}
           {/* Clip preview switcher */}
           {allClips.length > 1 && (
             <div className="preview-clip-picker-bar">
@@ -2310,9 +2438,23 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           <div className="studio-card-group">
             <div className="group-header">
               <span className="group-title">{t.studio.subtitlesTitle}</span>
+              {currentPreviewClip && onEditTranscript && (
+                <button type="button" onClick={() => onEditTranscript(currentPreviewClip)}
+                  style={{marginLeft:12,padding:'6px 10px',borderRadius:7,border:'1px solid #4b76aa',background:'#173451',color:'#e0f2fe',fontWeight:700,cursor:'pointer'}}>
+                  📝 Edit Transcript {previewEditedWords !== undefined ? '✓ Applied' : ''}
+                </button>
+              )}
+              {currentPreviewClip && onSyncSubtitles && <button type="button"
+                disabled={isSyncingSubtitles || isRendering || captionStyle === 'none'}
+                onClick={() => onSyncSubtitles(currentPreviewClip)}
+                style={{padding:'6px 10px',borderRadius:7,border:'1px solid #4b76aa',background:'#173451',color:'#e0f2fe',cursor:'pointer'}}>
+                {isSyncingSubtitles ? 'Menyinkronkan audio...' : 'Sinkronkan dari audio'}
+              </button>}
               <span className="group-badge success-badge">{t.studio.strictlyOneLine}</span>
             </div>
 
+            {subtitleSyncError && <p role="alert" style={{color:'#fca5a5'}}>{subtitleSyncError}</p>}
+            <p style={{fontSize:'.78rem',color:'var(--text-secondary)'}}>Sinkronkan dari audio mengambil ulang teks dan timing klip yang dipreview. Hasilnya langsung dipakai oleh preview dan render; edit manual melalui Edit Transcript.</p>
             {/* Subtitle Visibility Selector */}
             <div className="title-inputs-row" style={{ alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.65rem' }}>
               <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
@@ -2346,6 +2488,12 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             )}
 
             <div className={`caption-styles-grid ${captionStyle === 'none' ? 'subtitles-dimmed' : ''}`}>
+              <button type="button" className={`caption-style-card clean-minimal ${captionStyle === 'plain' ? 'active' : ''}`}
+                onClick={() => { setCaptionStyle('plain'); setLastActiveCaptionStyle('plain'); }}>
+                <div className="caption-preview-text" style={{textTransform:'none',fontWeight:500}}>Plain Subtitle</div>
+                <span className="caption-style-sub">Teks asli • Tanpa animasi / highlight</span>
+              </button>
+
               <button
                 type="button"
                 className={`caption-style-card viral-pop ${captionStyle === 'viral_pop' ? 'active' : ''}`}
@@ -2966,6 +3114,11 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             </div>
           </div>
 
+          {/* Added audio library browser; existing upload/render behavior stays unchanged. */}
+          <div className="studio-card-group">
+            <AudioLibraryPicker kind="bgm" onChoose={uploadBgmFile} busy={isUploadingBgm} active={isActive} />
+          </div>
+
           {/* 6. Hook Sound Effect (SFX) */}
           <div className="studio-card-group">
             <div className="group-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -3084,6 +3237,10 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             </div>
           </div>
 
+          <div className="studio-card-group">
+            <AudioLibraryPicker kind="sfx" onChoose={uploadHookSfxFile} busy={isUploadingHookSfx} active={isActive} />
+          </div>
+
           {/* 7. Original Clip Voice Audio Boost */}
           <div className="studio-card-group">
             <div className="group-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -3134,7 +3291,46 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             </div>
           </div>
 
-          {/* 8. Video Watermark Branding */}
+                    {/* Multi-SFX placement: local upload, relative clip time, separate volume per effect. */}
+          <div className="studio-group" style={{ padding: '1rem', marginTop: '1rem', border: '1px solid rgba(168,85,247,.35)', borderRadius: 12 }}>
+            <div style={{ fontWeight: 700, marginBottom: '.6rem' }}>🎛 Multi-SFX Timeline</div>
+            <p style={{ fontSize: 12, opacity: .8 }}>Add effects anywhere in the clip. Time is relative to the clip start; applies to each rendered clip.</p>
+            <label style={{ display: 'inline-block', cursor: 'pointer', padding: '.6rem .9rem', borderRadius: 8, background: 'rgba(168,85,247,.2)' }}>
+              {isUploadingTimelineSfx ? 'Uploading...' : '＋ Add SFX (MP3/WAV)'}
+              <input type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg" style={{ display: 'none' }} disabled={isUploadingTimelineSfx}
+                onChange={e => { const file = e.target.files?.[0]; if (file) void addTimelineSfx(file); e.target.value = ''; }} />
+            </label>
+            {timelineSfx.map((effect, index) => (
+              <div key={`${effect.filePath}-${index}`} style={{ marginTop: '.8rem', padding: '.7rem', border: '1px solid rgba(255,255,255,.12)', borderRadius: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <strong style={{ overflowWrap: 'anywhere', fontSize: 12 }}>{effect.fileName}</strong>
+                  <button type="button" onClick={() => setTimelineSfx(old => old.filter((_, i) => i !== index))}>✕</button>
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '.5rem', marginTop: '.6rem' }}>
+                  <button type="button" onClick={() => {
+                    const audioUrl = timelineSfxUrls[effect.filePath];
+                    if (audioUrl) { timelineAudioRef.current?.pause(); const audio = new Audio(audioUrl); timelineAudioRef.current = audio; audio.volume = Math.min(1, effect.volume / 100); void audio.play(); }
+                  }}>▶ Test Sound</button>
+                  <button type="button" onClick={() => setTimelineSfx(old => old.map((x, i) => i === index ? { ...x, time: 0 } : x))}>Start</button>
+                  <button type="button" onClick={() => setTimelineSfx(old => old.map((x, i) => i === index ? { ...x, time: Math.max(0, clipDuration - 1) } : x))}>End -1s</button>
+                  <button type="button" onClick={() => setTimelineSfx(old => old.map((x, i) => i === index ? { ...x, time: Math.max(0, currentTime - clipStart) } : x))}>Use Preview Time</button>
+                </div>
+                <label style={{ display: 'block', fontSize: 12, marginTop: '.5rem' }}>
+                  Time: <input type="number" min={0} max={clipDuration} step={0.1} value={effect.time}
+                    onChange={e => setTimelineSfx(old => old.map((x, i) => i === index ? { ...x, time: Math.max(0, Math.min(clipDuration, Number(e.target.value) || 0)) } : x))}
+                    style={{ width: 75, marginLeft: 8 }} /> seconds
+                </label>
+                <input type="range" min={0} max={clipDuration || 1} step={0.1} value={Math.min(effect.time, clipDuration)}
+                  onChange={e => setTimelineSfx(old => old.map((x, i) => i === index ? { ...x, time: Number(e.target.value) } : x))}
+                  style={{ width: '100%', marginTop: 8 }} />
+                <label style={{ display: 'block', fontSize: 12 }}>Volume: {effect.volume}%</label>
+                <input type="range" min={0} max={150} step={5} value={effect.volume}
+                  onChange={e => setTimelineSfx(old => old.map((x, i) => i === index ? { ...x, volume: Number(e.target.value) } : x))} style={{ width: '100%' }} />
+              </div>
+            ))}
+            {!!timelineSfx.length && <p style={{ fontSize: 11, opacity: .8, marginTop: 8 }}>Multi-SFX rendering requires FFmpeg CPU/Auto, not Browser WASM. Test Sound previews the effect alone.</p>}
+          </div>
+{/* 8. Video Watermark Branding */}
           <div className="studio-card-group" style={!watermarkEnabled ? { padding: '1rem 1.4rem' } : undefined}>
             <div className="group-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: watermarkEnabled ? '0.85rem' : 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
@@ -4021,7 +4217,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         whiteSpace: 'pre-line',
                         textAlign: 'center',
                         color: '#ffffff',
-                        fontWeight: 800,
+                        fontWeight: captionStyle === 'plain' ? 500 : 800,
                         textShadow: '0 0 2px #000, 0 1px 3px rgba(0,0,0,0.95), 0 0 5px rgba(0,0,0,0.8)',
                         background: 'transparent',
                         padding: '0 8px',
@@ -4074,47 +4270,22 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         textAlign: 'center',
                         textShadow: '0 0 2px #000, 0 1px 3px rgba(0,0,0,0.95), 0 0 5px rgba(0,0,0,0.8)',
                         display: 'inline-block',
+                        ...(captionStyle === 'plain' ? {
+                          width: '88%',
+                          maxWidth: '88%',
+                          whiteSpace: 'normal' as const,
+                          overflowWrap: 'anywhere' as const,
+                          lineHeight: 1.18,
+                        } : {}),
                       }}
                     >
-                      {captionStyle === 'viral_pop' && (
-                        <>
-                          <span style={{ color: '#ffffff' }}>{applyLetterCase('VIRAL', textCase)}</span>{' '}
-                          <span style={{ color: '#FFE600' }}>{applyLetterCase('POP', textCase)}</span>
-                        </>
-                      )}
-                      {captionStyle === 'beast_punch' && (
-                        <>
-                          <span style={{ color: '#ffffff' }}>{applyLetterCase('UNREAL', textCase)}</span>{' '}
-                          <span style={{ color: '#00FF66' }}>{applyLetterCase('HACK', textCase)}</span>
-                        </>
-                      )}
-                      {captionStyle === 'cyber_violet' && (
-                        <>
-                          <span style={{ color: '#ffffff' }}>{applyLetterCase('CYBER', textCase)}</span>{' '}
-                          <span style={{ color: '#D946EF' }}>{applyLetterCase('PUNCH', textCase)}</span>
-                        </>
-                      )}
-                      {captionStyle === 'fire_red' && (
-                        <>
-                          <span style={{ color: '#ffffff' }}>{applyLetterCase('HOT', textCase)}</span>{' '}
-                          <span style={{ color: '#FF2E2E' }}>{applyLetterCase('FIRE', textCase)}</span>
-                        </>
-                      )}
-                      {captionStyle === 'electric_cyan' && (
-                        <>
-                          <span style={{ color: '#ffffff' }}>{applyLetterCase('ELECTRIC', textCase)}</span>{' '}
-                          <span style={{ color: '#00F0FF' }}>{applyLetterCase('CYAN', textCase)}</span>
-                        </>
-                      )}
-                      {captionStyle === 'golden_aura' && (
-                        <>
-                          <span style={{ color: '#ffffff' }}>{applyLetterCase('GOLDEN', textCase)}</span>{' '}
-                          <span style={{ color: '#FFB800' }}>{applyLetterCase('MOMENT', textCase)}</span>
-                        </>
-                      )}
-                      {captionStyle === 'clean_minimal' && (
-                        <span style={{ color: '#ffffff' }}>
-                          {applyLetterCase('CLEAN SUBTITLE', textCase)}
+                      {liveCaption ? liveCaption.words.map(w => (
+                        <span key={w.id} style={{ color: captionStyle === 'plain' ? '#ffffff' : w.id === liveCaption.activeId ? liveHighlightColor[captionStyle] || '#FFE600' : '#ffffff', marginRight: '0.25em' }}>
+                          {captionStyle === 'plain' ? w.word : applyLetterCase(w.word, textCase)}
+                        </span>
+                      )) : (
+                        <span style={{color:'#cbd5e1',fontSize:'0.75em',opacity:0.85}}>
+                          {previewEditedWords ? '' : isSyncingSubtitles ? 'Menyinkronkan audio...' : 'Klik Sinkronkan dari audio untuk preview subtitle'}
                         </span>
                       )}
                     </span>
@@ -4314,7 +4485,9 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   <span className="info-val">
                     {batchProgress?.overall_status === 'completed'
                       ? t.studio.statusCompleted(batchProgress.clips.filter(c => c.status === 'completed').length)
-                      : isRendering
+                      : unresolvedRender
+                      ? 'Status render belum terkonfirmasi'
+                      : isRendering || batchProgress?.overall_status === 'running'
                       ? t.studio.statusRendering
                       : t.studio.statusReady}
                   </span>
@@ -4390,7 +4563,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             </div>
 
             {/* Batch Render Queue Card - Fancy glowing when generating */}
-            {batchProgress && (
+            {batchProgress && !onOpenExports && (
               <div className={`studio-batch-queue-card ${batchProgress.overall_status === 'running' ? 'is-processing' : ''}`}>
                 <div className="batch-progress-header">
                   <div>
@@ -4441,10 +4614,10 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                       </button>
                     )}
 
-                    {(batchProgress.overall_status === 'completed' || batchProgress.clips.some(c => c.status === 'completed')) && (
+                    {batchProgress.zip_available === true && batchProgress.zip_url && (
                       <a
-                        href={batchProgress.zip_url || `/api/download-batch-zip/${batchProgress.batch_id}`}
-                        download={`cheat_clip_pro_${batchProgress.batch_id}.zip`}
+                        href={batchProgress.zip_url}
+                        download={`void_cut_${batchProgress.batch_id}.zip`}
                         className="glowing-btn batch-zip-download-btn"
                         style={{
                           display: 'flex',
@@ -4629,6 +4802,9 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                                 </span>
                               )
                             )}
+                            {onUploadClip && clip.status === 'completed' && clip.download_available === true && clip.download_url?.startsWith('/api/download-rendered/') && (
+                              <button type="button" className="quick-dl-btn" onClick={() => onUploadClip(batchProgress.batch_id,clip)} style={{marginLeft:8}}>Upload</button>
+                            )}
                             {isError && (
                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                                 <span
@@ -4669,6 +4845,9 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                           </div>
                         </div>
 
+                        <progress max={100} value={clip.progress_percent}
+                          aria-label={`Progress for clip ${idx + 1}`} style={{ width: '100%' }} />
+
                         {/* Visible Error Box when clip fails */}
                         {isError && rawError && (
                           <ClipRenderErrorBox
@@ -4687,8 +4866,11 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
         </div>
       </div>
 
+      {recoveryBlocked && (unresolvedRender || ['missing','offline'].includes(recoveryConnection.mode)) &&
+        <RenderRecoveryNotice connection={recoveryConnection} launching={isRendering} onCheck={onCheckRender} onForget={onDismissProgress}/>}
       {/* Bottom Sticky Action Footer */}
       <div className="studio-bottom-action-bar">
+        {onOpenSocialAccounts&&<button type="button" className="studio-clear-temp-btn" onClick={onOpenSocialAccounts}>Login YouTube / TikTok</button>}
         <div className="action-bar-meta">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <span className="meta-badge">
@@ -4776,10 +4958,23 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
         <button
           className="studio-btn-render glowing-btn big-render-cta"
-          onClick={handleLaunch}
-          disabled={isRendering || batchProgress?.overall_status === 'running' || selectedClips.length === 0}
+          onClick={() => {
+            if (unresolvedRender) {
+              onCheckRender?.();
+              document.getElementById('studio-render-recovery')?.scrollIntoView({behavior:'smooth',block:'center'});
+              return;
+            }
+            if (hasServerResults && onOpenExports) onOpenExports();
+            else if (hasServerResults) document.getElementById('render-results')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            else handleLaunch();
+          }}
+          disabled={isRendering || isSyncingSubtitles || batchProgress?.overall_status === 'running' || (selectedClips.length === 0 && !hasServerResults && !unresolvedRender)}
         >
-          {batchProgress?.overall_status === 'running' ? (
+          {unresolvedRender ? (
+            <>Periksa / pulihkan render sebelumnya</>
+          ) : hasServerResults ? (
+            <>View render results / downloads</>
+          ) : batchProgress?.overall_status === 'running' ? (
             <>{t.studio.renderingInProgressBadge}</>
           ) : isRendering ? (
             <>{t.studio.launchingRenderBtn}</>
@@ -4793,6 +4988,11 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             </>
           )}
         </button>
+        {hasServerResults && selectedClips.length > 0 && (
+          <button type="button" className="studio-render-another" disabled={isRendering || isSyncingSubtitles || recoveryBlocked} onClick={handleLaunch}>
+            Render another batch
+          </button>
+        )}
       </div>
 
       {/* Custom Clear Temp Confirmation Modal */}

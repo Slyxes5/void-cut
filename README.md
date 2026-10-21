@@ -1,12 +1,16 @@
-# 🎬 Cheat Clip PRO
+# Void Cut
 
-> **AI Powered Auto Clipper — Turn long YouTube, Google Drive, and uploaded videos into viral TikToks, Shorts, and Reels with animated subtitles, face centering, and music in minutes.**
+> Turn long videos into short clips with AI-assisted moment selection, an editing studio, and export tools.
+
+Void Cut is developed from [Cheat Clip PRO](https://github.com/galihjuansaputra/cheat-clip-pro) by **galihjuansaputra and contributors**. It adds a dedicated workflow, a warm interface, subtitle editing, render recovery, and social account integration. See [CREDITS.md](CREDITS.md) for attribution.
+
+The npm project name is `void-cut`. This checkout currently remains in `C:\Projects\cheat-clip-pro` so existing launchers, Python environments, and automation paths keep working. The folder name does not determine the product name or OAuth callback URLs.
 
 ---
 
 ## ⚡ Quick Start & Setup
 
-Follow these steps to set up and run Cheat Clip PRO locally on **Windows**, **macOS**, or **Linux**.
+Follow these steps to set up and run Void Cut locally on **Windows**, **macOS**, or **Linux**.
 
 ### Step 1: Prerequisites
 
@@ -42,14 +46,15 @@ Make sure you have the following installed:
 
 ---
 
-### Step 2: Clone the Repository
+### Step 2: Open the Project
 
-Open your terminal and clone the repository:
+For the existing Windows checkout, open PowerShell in the project directory:
 
-```bash
-git clone https://github.com/galihjuansaputra/cheat-clip-pro.git
-cd cheat-clip-pro
+```powershell
+Set-Location C:\Projects\cheat-clip-pro
 ```
+
+The upstream repository linked above is the original project. It does not include the local Void Cut additions. A dedicated Void Cut remote has not been configured yet.
 
 ---
 
@@ -93,12 +98,13 @@ npm run dev
 
 ---
 
-## 🔄 Updating to the Latest Version
+## 🔄 Updating This Checkout
 
-To update Cheat Clip PRO to the latest release:
+This checkout's `origin` still points to Cheat Clip PRO. The inherited updater and `update.bat` pull from that remote; they are not a Void Cut release channel. Review upstream changes before applying them to this customized checkout.
+
+After deliberately applying reviewed source changes, refresh dependencies:
 
 ```bash
-git pull
 npm install
 pip install -r backend/requirements.txt
 ```
@@ -108,7 +114,7 @@ pip install -r backend/requirements.txt
 
 ## 🔑 Free Google Gemini API Key (Takes 1 Minute)
 
-Cheat Clip PRO uses Google's AI to find the best viral moments for free:
+Void Cut uses Google's AI to suggest clip candidates:
 1. Go to **[Google AI Studio](https://aistudio.google.com/)** and sign in with any Google account.
 2. Click **"Get API key"** (or **"Create API key"**).
 3. Copy your key (starts with `AIzaSy...`).
@@ -122,14 +128,14 @@ Cheat Clip PRO uses Google's AI to find the best viral moments for free:
 
 1. **Paste a YouTube URL** — Enter any podcast, stream, or video link.
 2. **Choose Duration** — Pick `~15s` (fast hooks), `~30s` (standard shorts), or `~60s` (story clips).
-3. **Click "Analyze Video"** — The AI finds the most exciting moments using YouTube audience retention data.
-4. **Customize in Clip Studio** — Adjust your video style:
+3. **Click "Find Clips" / "Cari Klip"** — After analysis, the app opens **Choose clips / Pilih klip**. Preview and select your clips, then click **Open Studio / Buka Studio**.
+4. **Customize in Void Cut Studio** — Adjust your video style:
    * **Frame & Crop**: Fullscreen 9:16 vertical, square, or split-screen facecam.
    * **Face Tracking**: Automatically keeps the speaker in the center of the frame.
    * **Subtitles**: Choose viral animated karaoke caption styles and fonts.
    * **Branding & Audio**: Add your watermark logo, background music, and hook sound effects.
    * **Hardware Acceleration**: Choose your graphics card (NVIDIA, AMD, Intel) or CPU.
-5. **Batch Render & Download** — Click **Batch Render**, then download all your finished videos together in one **.ZIP** file!
+5. **Render & Export** — Click **Batch Render** to open **Exports / Ekspor**, track progress, and download available MP4 or ZIP files. Server renders also support connecting social accounts and reviewing uploads; see [the social upload setup guide](docs/social-upload-setup.md).
 
 ---
 
@@ -163,7 +169,7 @@ Cheat Clip PRO uses Google's AI to find the best viral moments for free:
 * **Fix:** Click the 🍪 **Cookies** button in the top navigation bar, export your YouTube cookies using a free browser extension (like *Get cookies.txt locally*), and paste them into the app.
 
 ### 4. Does this work on AMD graphics cards and Mac?
-* **Yes!** Cheat Clip PRO automatically supports:
+* **Yes!** Void Cut supports:
   * **NVIDIA** (`h264_nvenc`)
   * **AMD** (`h264_amf` on Radeon GPUs & Ryzen CPUs)
   * **Intel** (`h264_qsv` on Arc & UHD Graphics)
@@ -174,4 +180,4 @@ Cheat Clip PRO uses Google's AI to find the best viral moments for free:
 
 ## 📄 License
 
-Distributed under the **MIT License**. Free for personal and commercial use!
+The original Cheat Clip PRO README declares the **MIT License**. Upstream attribution is retained in [CREDITS.md](CREDITS.md) and in the app footer. The upstream root currently has no standalone `LICENSE` file; the original copyright and license notice still need to be confirmed before distributing this derivative.

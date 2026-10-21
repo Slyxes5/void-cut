@@ -35,7 +35,7 @@ export const en = {
     urlPlaceholder: "Paste video link here (e.g. https://www.youtube.com/watch?v=... or shorts, youtu.be)",
     gdriveUrlLabel: "Google Drive Video URL",
     gdriveUrlPlaceholder: "Paste Google Drive share link (e.g. https://drive.google.com/file/d/.../view)",
-    hackClips: "Hack Clips",
+    hackClips: "Find Clips",
     processing: "Processing...",
 
     // AI Engine settings
@@ -50,7 +50,7 @@ export const en = {
     aiModelLabel: "AI Model Selection",
     fetchingModels: "Fetching available...",
     resilienceTip: "Free Tier Resilience:",
-    resilienceDesc: "If a model encounters quota limits or errors, Cheat Clip Pro automatically tries all newer and older Flash models (3.x, 2.5, 2.0, 1.5) fetched from your API key until clips are successfully found!",
+    resilienceDesc: "If a model encounters quota limits or errors, Void Cut automatically tries all newer and older Flash models (3.x, 2.5, 2.0, 1.5) fetched from your API key until clips are successfully found!",
 
     // Customization
     clipCustomizationTitle: "Clip Customization",
@@ -312,7 +312,7 @@ export const en = {
     hardwareEncodingHint: "FastAPI & FFmpeg hardware encoding in progress. You can keep this open or minimize.",
   },
   studio: {
-    heading: "Cheat Clip Auto Clipper",
+    heading: "Void Cut Studio",
     subtext: "Real-time video layout framing, dynamic subtitle typography, and batch GPU-accelerated 1080x1920 export",
     previewClip: "👁️ Previewing Clip:",
     resetToDefaults: "↺ Reset to Defaults",
@@ -674,7 +674,7 @@ export const en = {
     clipTitleLabel: "Clip Title / Filename:",
   },
   updateModal: {
-    title: "Cheat Clip PRO Updates",
+    title: "Void Cut Updates",
     subtitle: "Check for new features, bug fixes, and update with automatic restart",
     currentVersion: "Current Version",
     branch: "Branch",
@@ -684,14 +684,14 @@ export const en = {
     checkUpdateBtn: "Check for Updates",
     checkingAgain: "Checking again...",
     upToDateTitle: "You're on the latest version!",
-    upToDateDesc: "Cheat Clip PRO is completely up to date with the remote repository.",
+    upToDateDesc: "Void Cut is completely up to date with the remote repository.",
     updateAvailableTitle: "New update available!",
     updateAvailableDesc: (count: number) => `${count} new update${count > 1 ? 's' : ''} available from GitHub.`,
     newCommits: "What's New in this Update:",
     updateRestartBtn: "Update & Restart App",
-    updatingApp: "Updating Cheat Clip PRO...",
+    updatingApp: "Updating Void Cut...",
     restartBtn: "Restart App",
-    restartingTitle: "Restarting Cheat Clip PRO...",
+    restartingTitle: "Restarting Void Cut...",
     restartingDesc: "Please wait while the server restarts and frees ports. This page will automatically reconnect once the app is back online.",
     reconnecting: "Reconnecting to server...",
     reconnected: "Connected! Reloading app...",

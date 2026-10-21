@@ -1,11 +1,11 @@
 version: '3.8'
 
 services:
-  cheat-clip-pro:
+  void-cut:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: cheat-clip-pro
+    container_name: void-cut
     restart: unless-stopped
     ports:
       - "8000:8000"

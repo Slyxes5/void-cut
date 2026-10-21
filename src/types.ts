@@ -9,12 +9,22 @@ export interface TranscriptLine {
   end: number;
   text: string;
   engagement?: number;
+  words?: Array<{ word: string; start: number; end: number }> | null;
+}
+
+export interface EditedSubtitleWord {
+  id: string;
+  group: number;
+  word: string;
+  start: number; // absolute timestamp in source video
+  end: number;
 }
 
 export interface ViralClip {
   title: string;
   start_time: number;
   end_time: number;
+  edited_subtitle_words?: EditedSubtitleWord[];
   hook_time?: number;
   virality_score: number;
   key_quotes: string[];
@@ -40,6 +50,7 @@ export interface AnalyzeResponse {
 export type AspectRatioOption = '9:16' | '1:1' | '4:3' | '16:9' | '16:9_landscape';
 export type BackgroundStyle = 'black' | 'blurred';
 export type CaptionStyle = 
+  | 'plain'
   | 'viral_pop' 
   | 'beast_punch' 
   | 'cyber_violet' 
@@ -93,6 +104,13 @@ export interface HardwareAccelInfo {
   }>;
 }
 
+export interface TimelineSfx {
+  filePath: string;
+  fileName: string;
+  time: number; // seconds relative to clip start
+  volume: number; // percent
+}
+
 export interface RenderSettings {
   renderEngine?: 'server' | 'client';
   aspectRatio: AspectRatioOption;
@@ -133,6 +151,7 @@ export interface RenderSettings {
   hookSfxFilePath?: string;
   hookSfxFileName?: string;
   hookSfxVolume?: number; // 0 to 150%
+  timelineSfx?: TimelineSfx[];
   // Raw Audio / Voice Boost
   originalAudioVolume?: number; // 0 to 200%
   // Watermark
@@ -159,6 +178,7 @@ export interface RenderClipStatus {
   status: 'pending' | 'downloading' | 'transcribing' | 'tracking' | 'rendering' | 'completed' | 'error';
   progress_percent: number;
   download_url?: string;
+  download_available?: boolean;
   error_message?: string;
   error?: string;
 }
@@ -168,7 +188,11 @@ export interface BatchRenderProgress {
   total_clips: number;
   current_clip_index: number;
   overall_status: 'running' | 'completed' | 'error';
-  zip_url?: string;
+  zip_url?: string | null;
+  zip_available?: boolean;
+  can_retry?: boolean;
+  recovered_from_files?: boolean;
+  request_id?: string;
   error_message?: string;
   warning_message?: string;
   clips: RenderClipStatus[];
