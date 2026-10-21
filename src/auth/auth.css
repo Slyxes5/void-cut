@@ -31,3 +31,5 @@
 .auth-demo-toolbar button { flex: 0 0 auto; min-height: 36px; padding: 6px 12px; border: 1px solid #a34c2c; border-radius: 8px; background: #a34c2c; color: #fff; cursor: pointer; font-size: 13px; }
 .auth-demo-toolbar button:focus-visible { outline: 3px solid #c87955; outline-offset: 3px; }
 @media (max-width: 560px) { .auth-demo-toolbar { align-items: flex-start; flex-direction: column; padding: 10px 14px; } }
+
+.auth-toolbar { max-width: 1480px; margin-inline: auto; padding: 6px clamp(1rem, 2vw, 2rem); background: transparent; }

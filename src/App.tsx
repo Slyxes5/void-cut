@@ -58,6 +58,9 @@ export default function App() {
     return '30s';
   });
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('cheat_clip_gemini_api_key') || '');
+  const [analysisSettingsTab, setAnalysisSettingsTab] = useState<'engine' | 'recipe'>(() =>
+    localStorage.getItem('cheat_clip_gemini_api_key')?.trim() ? 'recipe' : 'engine'
+  );
   const [showApiKey, setShowApiKey] = useState(false);
   const [isCookiesModalOpen, setIsCookiesModalOpen] = useState(false);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
@@ -2659,6 +2662,11 @@ Transcript:
         <form className="analysis-form" onSubmit={handleAnalyze} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
           {/* Source Selector Tabs: YouTube vs Google Drive vs Upload Video File */}
           <div className="analysis-source-tabs" style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.25rem', flexWrap: 'wrap' }}>
+            <div className="workflow-source-step-title">
+              <span>01</span>
+              <strong>{language === 'id' ? 'Pilih sumber video' : 'Choose a video source'}</strong>
+              <small>{language === 'id' ? 'YouTube, Google Drive, atau file dari perangkat' : 'YouTube, Google Drive, or a file from your device'}</small>
+            </div>
             {/* YouTube Tab */}
             <button
               type="button"
@@ -2762,7 +2770,7 @@ Transcript:
 
           {/* YouTube input mode */}
           {sourceMode === 'youtube' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', width: '100%' }}>
+            <div className="workflow-source-input" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', width: '100%' }}>
               <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.form.urlLabel}</label>
               <div className="form-main-input-row">
                 <input
@@ -2805,7 +2813,7 @@ Transcript:
 
           {/* Google Drive input mode */}
           {sourceMode === 'gdrive' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', width: '100%' }}>
+            <div className="workflow-source-input" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', width: '100%' }}>
               <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.form.gdriveUrlLabel}</label>
               <div className="form-main-input-row">
                 <input
@@ -2851,7 +2859,7 @@ Transcript:
 
           {/* Upload Local Video mode */}
           {sourceMode === 'upload' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div className="workflow-source-input" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <input
                 type="file"
                 ref={videoFileInputRef}
@@ -3050,11 +3058,36 @@ Transcript:
             </div>
           )}
 
-          <div className="form-settings-grid">
-            {/* Card 1: AI Engine Configuration */}
-            <div className="analysis-settings-card" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', padding: '1.25rem', borderRadius: '12px', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.04)' }}>
+          <div className="form-settings-grid" data-active-settings={analysisSettingsTab}>
+            <div className="workflow-source-step-title workflow-source-settings-title">
+              <span>02</span>
+              <strong>{language === 'id' ? 'Atur AI dan klip' : 'Set up AI and clips'}</strong>
+              <small>{language === 'id' ? 'Masukkan API key, lalu sesuaikan resep klip bila perlu' : 'Add your API key, then adjust the clip recipe if needed'}</small>
+            </div>
+            <div className="analysis-settings-tabs" aria-label={language === 'id' ? 'Pengaturan analisis' : 'Analysis settings'}>
+              <button type="button" className={`analysis-settings-tab${analysisSettingsTab === 'engine' ? ' active' : ''}`}
+                aria-pressed={analysisSettingsTab === 'engine'} aria-controls="analysis-engine-panel" onClick={() => setAnalysisSettingsTab('engine')}>
+                <span className="analysis-settings-tab-index">01</span>
+                <span className="analysis-settings-tab-copy">
+                  <strong>{language === 'id' ? 'Mesin AI' : 'AI engine'}</strong>
+                  <small>{apiKey.trim() ? (language === 'id' ? 'Siap digunakan' : 'Ready to use') : (language === 'id' ? 'API key diperlukan' : 'API key required')}</small>
+                </span>
+                <span className={`analysis-settings-status${apiKey.trim() ? ' ready' : ''}`} aria-hidden="true">{apiKey.trim() ? '✓' : '!'}</span>
+              </button>
+              <button type="button" className={`analysis-settings-tab${analysisSettingsTab === 'recipe' ? ' active' : ''}`}
+                aria-pressed={analysisSettingsTab === 'recipe'} aria-controls="analysis-recipe-panel" onClick={() => setAnalysisSettingsTab('recipe')}>
+                <span className="analysis-settings-tab-index">02</span>
+                <span className="analysis-settings-tab-copy">
+                  <strong>{language === 'id' ? 'Resep klip' : 'Clip recipe'}</strong>
+                  <small>{durationPref} · {clipCountMode === 'auto' ? (language === 'id' ? 'jumlah otomatis' : 'auto count') : `${targetClipCount} ${language === 'id' ? 'klip' : 'clips'}`}</small>
+                </span>
+                <span className="analysis-settings-status ready" aria-hidden="true">↗</span>
+              </button>
+            </div>
+            {/* Panel 1: AI Engine Configuration */}
+            <div id="analysis-engine-panel" className="analysis-settings-card analysis-engine-card" hidden={analysisSettingsTab !== 'engine'} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', padding: '1.25rem', borderRadius: '12px', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.04)' }}>
               <h3 style={{ fontSize: '0.9rem', color: 'var(--primary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.25rem' }}>
-                🤖 {t.form.aiSettingsTitle}
+                {t.form.aiSettingsTitle}
               </h3>
               
               {/* API Key input — required */}
@@ -3072,7 +3105,7 @@ Transcript:
                       style={{ color: 'var(--primary)', textDecoration: 'none', fontSize: '0.75rem', fontWeight: 600, transition: 'var(--transition-smooth)' }}
                       className="action-link-btn"
                     >
-                      🔑 {t.form.getFreeKey}
+                      {t.form.getFreeKey}
                     </a>
                     <span style={{ color: 'rgba(255,255,255,0.15)', fontSize: '0.75rem' }}>|</span>
                     <button
@@ -3148,15 +3181,15 @@ Transcript:
                   )}
                 </select>
                 <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.4, marginTop: '0.2rem' }}>
-                  💡 <strong>{t.form.resilienceTip}</strong> {t.form.resilienceDesc}
+                  <strong>{t.form.resilienceTip}</strong> {t.form.resilienceDesc}
                 </span>
               </div>
             </div>
 
-            {/* Card 2: Clip Parameters & Focus */}
-            <div className="analysis-settings-card" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', padding: '1.25rem', borderRadius: '12px', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.04)' }}>
+            {/* Panel 2: Clip Parameters & Focus */}
+            <div id="analysis-recipe-panel" className="analysis-settings-card analysis-recipe-card" hidden={analysisSettingsTab !== 'recipe'} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', padding: '1.25rem', borderRadius: '12px', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.04)' }}>
               <h3 style={{ fontSize: '0.9rem', color: 'var(--secondary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.25rem' }}>
-                ⚡ {t.form.clipCustomizationTitle}
+                {t.form.clipCustomizationTitle}
               </h3>
 
               {/* Preferred Duration Selector */}
@@ -3210,7 +3243,7 @@ Transcript:
                 </div>
                 {durationPref === 'auto' && (
                   <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.3, marginTop: '0.1rem' }}>
-                    💡 {t.form.durAutoTip}
+                    {t.form.durAutoTip}
                   </span>
                 )}
               </div>
@@ -3304,12 +3337,12 @@ Transcript:
                       <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', width: '20px', textAlign: 'right' }}>50</span>
                     </div>
                     <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.3 }}>
-                      💡 {t.form.clipCountTip(targetClipCount, targetClipCount <= 5 ? `${Math.max(1, targetClipCount - 1)}-${targetClipCount + 2}` : targetClipCount <= 10 ? `${Math.max(1, targetClipCount - 2)}-${targetClipCount + 3}` : `${targetClipCount - 5}-${targetClipCount + 5}`)}
+                      {t.form.clipCountTip(targetClipCount, targetClipCount <= 5 ? `${Math.max(1, targetClipCount - 1)}-${targetClipCount + 2}` : targetClipCount <= 10 ? `${Math.max(1, targetClipCount - 2)}-${targetClipCount + 3}` : `${targetClipCount - 5}-${targetClipCount + 5}`)}
                     </span>
                   </>
                 ) : (
                   <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.3, marginTop: '0.1rem' }}>
-                    💡 {t.form.clipCountAutoTip}
+                    {t.form.clipCountAutoTip}
                   </span>
                 )}
               </div>
@@ -3317,10 +3350,10 @@ Transcript:
           </div>
 
           {/* Subtitles Source Section */}
-          <div className="analysis-options-section" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', borderTop: '1px solid var(--border-color)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
-            <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.form.subtitlesSource}</label>
+          <div className="analysis-options-section workflow-source-subtitles" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', borderTop: '1px solid var(--border-color)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
+            <label className="workflow-source-section-title">{t.form.subtitlesSource}</label>
             <div className="analysis-options-row" style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', cursor: 'pointer' }}>
+              <label className="workflow-source-choice">
                 <input
                   type="radio"
                   name="subtitlesSource"
@@ -3329,9 +3362,12 @@ Transcript:
                   style={{ accentColor: 'var(--primary)' }}
                   disabled={loading}
                 />
-                {sourceMode === 'youtube' ? t.form.autoFetchYoutube : t.form.autoTranscript}
+                <span className="workflow-source-choice-copy">
+                  <strong>{sourceMode === 'youtube' ? t.form.autoFetchYoutube : t.form.autoTranscript}</strong>
+                  <small>{sourceMode === 'youtube' ? t.form.autoSubtitleDescription : t.form.autoTranscriptDescription}</small>
+                </span>
               </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', cursor: 'pointer' }}>
+              <label className="workflow-source-choice">
                 <input
                   type="radio"
                   name="subtitlesSource"
@@ -3340,7 +3376,10 @@ Transcript:
                   style={{ accentColor: 'var(--primary)' }}
                   disabled={loading}
                 />
-                {t.form.uploadCustomSubtitles}
+                <span className="workflow-source-choice-copy">
+                  <strong>{t.form.uploadCustomSubtitles}</strong>
+                  <small>{t.form.manualSubtitleDescription}</small>
+                </span>
               </label>
 
               {subtitlesSource === 'manual' && (
@@ -3387,7 +3426,7 @@ Transcript:
                   </label>
                   {manualSubtitlesFileName && (
                     <span style={{ fontSize: '0.85rem', color: 'var(--primary)', fontWeight: '500' }}>
-                      📄 {manualSubtitlesFileName}
+                      {manualSubtitlesFileName}
                     </span>
                   )}
                 </div>
@@ -3395,17 +3434,17 @@ Transcript:
             </div>
 
             {subtitlesSource === 'youtube' && (
-              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', opacity: 0.8, display: 'block', marginTop: '0.15rem', lineHeight: '1.4' }}>
-                💡 <strong>{t.form.subtitlesTipTitle}</strong> {t.form.subtitlesTipDesc} <a href="https://downsub.com/" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--secondary)', textDecoration: 'underline', fontWeight: '500' }}>downsub.com</a> {t.form.andUploadOption}
+              <span className="workflow-source-tip">
+                <strong>{t.form.subtitlesTipTitle}</strong> {t.form.subtitlesTipDesc} <a href="https://downsub.com/" target="_blank" rel="noopener noreferrer">downsub.com</a> {t.form.andUploadOption}
               </span>
             )}
           </div>
 
           {/* Custom Search Range Section */}
-          <div className="analysis-options-section" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', borderTop: '1px solid var(--border-color)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
-            <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.form.analysisRange}</label>
+          <div className="analysis-options-section workflow-source-range" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', borderTop: '1px solid var(--border-color)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
+            <label className="workflow-source-section-title">{t.form.analysisRange}</label>
             <div className="analysis-options-row" style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', cursor: 'pointer' }}>
+              <label className="workflow-source-choice">
                 <input
                   type="radio"
                   name="rangeType"
@@ -3414,9 +3453,12 @@ Transcript:
                   style={{ accentColor: 'var(--primary)' }}
                   disabled={loading}
                 />
-                {t.form.entireVideo}
+                <span className="workflow-source-choice-copy">
+                  <strong>{t.form.entireVideo}</strong>
+                  <small>{t.form.entireVideoDescription}</small>
+                </span>
               </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', cursor: 'pointer' }}>
+              <label className="workflow-source-choice">
                 <input
                   type="radio"
                   name="rangeType"
@@ -3425,7 +3467,10 @@ Transcript:
                   style={{ accentColor: 'var(--primary)' }}
                   disabled={loading}
                 />
-                {t.form.customRange}
+                <span className="workflow-source-choice-copy">
+                  <strong>{t.form.customRange}</strong>
+                  <small>{t.form.customRangeDescription}</small>
+                </span>
               </label>
 
               {rangeType === 'custom' && (
@@ -3453,7 +3498,7 @@ Transcript:
               )}
             </div>
             {rangeType === 'custom' && (
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              <span className="workflow-source-range-hint">
                 {t.form.rangeFormatHint}
               </span>
             )}
@@ -4163,7 +4208,7 @@ Transcript:
       )}
 
       </div>
-      <div className="workflow-page workflow-clips" hidden={page !== 'clips'}>
+      <div className="workflow-page workflow-clips workflow-cutdesk" hidden={page !== 'clips'}>
       {/* Dashboard Section - Video Player, Timeline, and Clip list */}
       {result && (
         <main className="dashboard-grid">
@@ -5019,7 +5064,7 @@ Transcript:
         onClose={closeSocialUpload}
       />}
       {socialAccountsOpen && <SocialUploadModal onClose={closeSocialAccounts} />}
-      <div className="workflow-page workflow-studio" hidden={page !== 'studio'}>
+      <div className="workflow-page workflow-studio workflow-cutdesk" hidden={page !== 'studio'}>
       {/* Keep Studio mounted across navigation to preserve unsaved settings. */}
       {result && (
         <ClipStudioSection

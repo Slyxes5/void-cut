@@ -5,16 +5,16 @@ const pages: WorkflowPage[] = ['source', 'clips', 'studio', 'exports'];
 const copy = {
   id: {
     nav: 'Alur kerja', steps: ['Sumber video', 'Pilih klip', 'Studio', 'Ekspor'],
-    titles: ['Mulai dari satu video.', 'Temukan momen pilihanmu.', 'Bentuk klip sesuai gayamu.', 'Klipmu, siap dibagikan.'],
-    descriptions: ['Tempel link atau upload video, lalu biarkan AI mencari momennya.', 'Preview rekomendasi dan tandai klip yang ingin kamu edit.', 'Atur tampilan, subtitle, dan audio sebelum mulai render.', 'Pantau render, unduh hasil, atau lanjutkan ke akun sosialmu.'],
+    titles: ['Pilih video untuk memulai.', 'Temukan momen pilihanmu.', 'Bentuk klip sesuai gayamu.', 'Klipmu, siap dibagikan.'],
+    descriptions: ['Pilih sumber video, tempel tautan atau unggah file, lalu tekan “Cari Klip”. Pengaturan AI ada di panel sebelah kanan.', 'Lihat rekomendasi, lalu pilih klip yang ingin kamu edit.', 'Atur tampilan, subtitle, dan audio sebelum mulai render.', 'Pantau render, unduh hasil, atau lanjutkan ke akun sosialmu.'],
     back: 'Kembali', next: 'Buka Studio', resume: 'Lihat hasil analisis', selected: 'klip dipilih',
     analyzing: 'Menganalisis video…', analyzingDescription: 'Progres analisis tampil di bawah. Hasil akan terbuka otomatis saat selesai.',
     pending: 'Analisis video terlebih dahulu',
   },
   en: {
     nav: 'Workflow', steps: ['Video source', 'Choose clips', 'Studio', 'Exports'],
-    titles: ['Start with one video.', 'Find your best moments.', 'Make the cut your own.', 'Your clips, ready to share.'],
-    descriptions: ['Paste a link or upload a video, then let AI find the moments.', 'Preview recommendations and select the clips you want to edit.', 'Adjust the framing, captions, and audio before rendering.', 'Track renders, download files, or continue to your social accounts.'],
+    titles: ['Choose a video to get started.', 'Find your best moments.', 'Make the cut your own.', 'Your clips, ready to share.'],
+    descriptions: ['Choose a source, paste a link or upload a file, then select “Find Clips”. AI settings are in the panel on the right.', 'Review recommendations and select the clips you want to edit.', 'Adjust the framing, captions, and audio before rendering.', 'Track renders, download files, or continue to your social accounts.'],
     back: 'Back', next: 'Open Studio', resume: 'View analysis', selected: 'clips selected',
     analyzing: 'Analyzing your video…', analyzingDescription: 'Follow the progress below. Your results will open automatically when ready.',
     pending: 'Analyze a video first',
@@ -47,7 +47,7 @@ export function WorkflowNavigation({ page, onNavigate, hasAnalysis, selectedCoun
         {step === 'exports' && rendering && <span className="workflow-live-dot" aria-label={language === 'id' ? 'Render berlangsung' : 'Rendering'} />}
       </button>)}
     </nav>
-    <section className="workflow-heading">
+    <section className="workflow-heading" data-page={page}>
       <div>
         <p className="workflow-eyebrow">VOID CUT <span>/</span> {text.steps[index]}</p>
         <h2 id="workflow-page-title" tabIndex={-1}>{loading && page === 'source' ? text.analyzing : text.titles[index]}</h2>
