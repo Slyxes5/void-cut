@@ -108,15 +108,18 @@ export default function PublicPortfolio() {
         <div>
           <p className="portfolio-eyebrow">A PERSONAL CREATOR TOOL</p>
           <h2>Made to keep the creative work yours.</h2>
-          <p>Void Cut is an independent project for turning video into concise, expressive clips. The public page is a portfolio preview; the editor and its processing tools are available only in the owner’s private workspace.</p>
+          <p>Void Cut builds on Cheat Clip PRO, with a redesigned workflow for turning long videos into concise, expressive clips. The public page is a portfolio preview; the editor and its processing tools are available only in the owner’s private workspace.</p>
         </div>
         <a className="portfolio-about-link" href={repositoryUrl} target="_blank" rel="noreferrer">See the project on GitHub <span aria-hidden="true">↗</span></a>
       </section>
 
       <footer className="portfolio-footer">
-        <a className="portfolio-wordmark" href="#top"><img src="/void-cut-logo.png" alt="" /><span>VOID CUT</span></a>
-        <p>Find the moment. Shape the story.</p>
-        <span>Public showcase · Private editor</span>
+        <div className="portfolio-footer-main">
+          <a className="portfolio-wordmark" href="#top"><img src="/void-cut-logo.png" alt="" /><span>VOID CUT</span></a>
+          <p>Find the moment. Shape the story.</p>
+          <span>Public showcase · Private editor</span>
+        </div>
+        <p className="portfolio-credit">Built on <a href="https://github.com/galihjuansaputra/cheat-clip-pro" target="_blank" rel="noreferrer">Cheat Clip PRO</a> by galihjuansaputra and contributors.</p>
       </footer>
     </main>
   );
