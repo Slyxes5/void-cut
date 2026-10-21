@@ -24,3 +24,10 @@
 .auth-notice { border-color: #d8c8b1; }
 .auth-toolbar { background: #eae3d7; color: #6a6158; }
 .auth-toolbar button { min-height: 32px; padding: 5px 12px; font-size: 12px; }
+
+.auth-card .auth-preview-button { background: #fffdf9; color: #85452d; border-color: #cdbda8; }
+.auth-demo-toolbar { position: sticky; top: 0; z-index: 10000; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 20px; border-bottom: 1px solid #d8c8b1; background: #fff7e8; color: #684832; font-size: 13px; }
+.auth-demo-toolbar strong { color: #85452d; }
+.auth-demo-toolbar button { flex: 0 0 auto; min-height: 36px; padding: 6px 12px; border: 1px solid #a34c2c; border-radius: 8px; background: #a34c2c; color: #fff; cursor: pointer; font-size: 13px; }
+.auth-demo-toolbar button:focus-visible { outline: 3px solid #c87955; outline-offset: 3px; }
+@media (max-width: 560px) { .auth-demo-toolbar { align-items: flex-start; flex-direction: column; padding: 10px 14px; } }

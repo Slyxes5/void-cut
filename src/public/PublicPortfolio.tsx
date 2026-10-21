@@ -48,10 +48,11 @@ export default function PublicPortfolio() {
             Turn long-form video into short clips with assisted moment discovery, expressive captions, and a focused editing studio.
           </p>
           <div className="portfolio-actions">
-            <a className="portfolio-button portfolio-button-primary" href="#workflow">Explore the workflow <span aria-hidden="true">↓</span></a>
+            <a className="portfolio-button portfolio-button-primary" href="/?demo=1">Open Void Cut demo <span aria-hidden="true">↗</span></a>
+            <a className="portfolio-button portfolio-button-quiet" href="#workflow">Explore the workflow <span aria-hidden="true">↓</span></a>
             <a className="portfolio-button portfolio-button-quiet" href={repositoryUrl} target="_blank" rel="noreferrer">Explore on GitHub <span aria-hidden="true">↗</span></a>
           </div>
-          <p className="portfolio-private-note"><span aria-hidden="true">⌑</span> Public project preview · The editing workspace stays private</p>
+          <p className="portfolio-private-note"><span aria-hidden="true">⌑</span> Public demo · Editing and processing features stay locked</p>
         </div>
 
         <div className="portfolio-preview" aria-label="Illustration of the Void Cut editing workflow">

@@ -3,9 +3,14 @@ import { AuthSession, attachAuthSession } from './client';
 
 const defaultSession = new AuthSession((...args) => window.fetch(...args));
 
-export function AuthGate({ children, session = defaultSession }: { children: ReactNode; session?: AuthSession }) {
+export function AuthGate({ children, session = defaultSession, initialGuestPreview = false }: {
+  children: ReactNode;
+  session?: AuthSession;
+  initialGuestPreview?: boolean;
+}) {
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
   const [password, setPassword] = useState('');
+  const [guestPreview, setGuestPreview] = useState(initialGuestPreview);
   useEffect(() => attachAuthSession(session), [session]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -14,12 +19,16 @@ export function AuthGate({ children, session = defaultSession }: { children: Rea
     await session.login(value);
   };
   return <>
-    {state.everAuthenticated && <div className="auth-editor" hidden={!state.authenticated} inert={!state.authenticated}>
-      <div className="auth-toolbar"><span>Private session</span><button type="button" disabled={state.busy}
-        onClick={() => void session.logout()}>Sign out</button></div>
+    {guestPreview && !state.authenticated && <div className="auth-demo-toolbar" role="status">
+      <span><strong>Mode demo</strong> · Fitur terkunci sampai Anda masuk.</span>
+      <button type="button" onClick={() => setGuestPreview(false)}>Masuk untuk membuka fitur</button>
+    </div>}
+    {(state.everAuthenticated || guestPreview) && <div className="auth-editor" hidden={!state.authenticated && !guestPreview} inert={!state.authenticated}>
+      {state.authenticated ? <div className="auth-toolbar"><span>Private session</span><button type="button" disabled={state.busy}
+        onClick={() => void session.logout()}>Sign out</button></div> : null}
       {children}
     </div>}
-    {!state.authenticated && <main className="auth-screen">
+    {!state.authenticated && !guestPreview && <main className="auth-screen">
       <section className="auth-card" aria-labelledby="auth-title">
         <div className="auth-brand">VOID CUT</div>
         <h1 id="auth-title">Private editor</h1>
@@ -35,6 +44,9 @@ export function AuthGate({ children, session = defaultSession }: { children: Rea
             <button type="submit" disabled={state.busy || !password}>{state.busy ? 'Signing in…' : 'Sign in'}</button>
           </form>}
           {state.message && <p className="auth-notice" role="alert">{state.message}</p>}
+          <button className="auth-preview-button" type="button" onClick={() => setGuestPreview(true)}>
+            View demo without signing in
+          </button>
           <button className="auth-recheck" type="button" disabled={state.busy} onClick={() => void session.refresh()}>Check connection again</button>
           {state.everAuthenticated && <p>Your editor remains mounted. Sign in again to continue; do not refresh if you have unsaved edits.</p>}
         </>}
